@@ -1,0 +1,448 @@
+One-Shot Prompt: Add Risk Panel + Confirm Upload
+PROJECT: bet-ocr-app / Add Risk Management panel + Confirm Upload dialog
+
+Goal:
+- Backend: add /stats/risk endpoint that computes Sharpe Ratio, Max Drawdown, VaR(95%), daily P/L series, exposures by set & bookmaker, time-windowed via ?hours=.
+- Frontend: new route /admin/risk with charts/cards; add sidebar link "Risk".
+- Frontend: modify Upload screen to show a confirmation modal before actually uploading.
+
+Make the following changes.
+
+============================================================
+BACKEND (FastAPI)
+============================================================
+
+1) NEW FILE: app/routers/risk.py
+--------------------------------
+from fastapi import APIRouter, Depends, Query, HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from datetime import datetime, timedelta
+import math
+from typing import List, Dict, Any
+from app.db.session import get_db
+from app.deps import current_user
+from app.models.bet import Bet
+from app.models.bet_set import BetSet
+from app.models.bookmaker import Bookmaker
+
+router = APIRouter(prefix="/stats", tags=["risk"])
+
+def _utcnow():
+    return datetime.utcnow()
+
+@router.get("/risk")
+def risk_stats(
+    hours: int = Query(720, ge=1, le=365*24, description="Lookback window in hours"),
+    db: Session = Depends(get_db),
+    user = Depends(current_user),
+):
+    # Time range
+    since = _utcnow() - timedelta(hours=hours)
+
+    # Pull settled/recorded bets in window (ignore pending: profit is NULL in your model until settled OR use result_status)
+    q = (
+        db.query(
+            Bet.id,
+            Bet.set_id,
+            Bet.bookmaker_id,
+            Bet.uploaded_at,
+            Bet.profit,
+            Bet.stake_manual,
+        )
+        .filter(Bet.uploaded_at >= since)
+    )
+    rows = q.all()
+    if not rows:
+        return {
+            "hours": hours,
+            "summary": {"sharpe": None, "max_drawdown": None, "var95": None, "n": 0},
+            "daily_pl": [],
+            "exposure_by_set": [],
+            "exposure_by_bookmaker": []
+        }
+
+    # Convert to Python lists
+    profits = []
+    daily_map = {}  # date -> profit sum
+    expo_set = {}   # set_id -> total stake
+    expo_bm = {}    # bookmaker_id -> total stake
+    cum = 0.0
+    equity_curve = []  # (timestamp, cum_profit)
+
+    # Build aggregates
+    for r in rows:
+        p = float(r.profit or 0.0)
+        s = float(r.stake_manual or 0.0)
+        profits.append(p)
+
+        d = (r.uploaded_at or _utcnow()).date()
+        daily_map[d] = daily_map.get(d, 0.0) + p
+
+        if r.set_id:
+            expo_set[r.set_id] = expo_set.get(r.set_id, 0.0) + s
+        if r.bookmaker_id:
+            expo_bm[r.bookmaker_id] = expo_bm.get(r.bookmaker_id, 0.0) + s
+
+    # Daily P/L series
+    daily_pl = [{"date": d.isoformat(), "pl": round(v, 2)} for d, v in sorted(daily_map.items())]
+
+    # Equity curve (cumulative over time using daily series)
+    for point in daily_pl:
+        cum += point["pl"]
+        equity_curve.append(cum)
+
+    # Max Drawdown
+    max_drawdown = None
+    if equity_curve:
+        peak = equity_curve[0]
+        mdd = 0.0
+        for v in equity_curve:
+            if v > peak:
+                peak = v
+            drawdown = peak - v
+            if drawdown > mdd:
+                mdd = drawdown
+        max_drawdown = round(mdd, 2)
+
+    # VaR 95% (historical, on per-bet profits)
+    var95 = None
+    if profits:
+        sorted_p = sorted(profits)
+        idx = int(0.05 * (len(sorted_p) - 1))
+        var95 = round(sorted_p[idx], 2)  # 5th percentile of profit distribution (can be negative)
+
+    # Sharpe Ratio (per-bet), risk-free assumed 0 in this context
+    sharpe = None
+    if profits and len(profits) > 1:
+        mean_p = sum(profits) / len(profits)
+        var_p = sum((x - mean_p) ** 2 for x in profits) / (len(profits) - 1)
+        std_p = math.sqrt(var_p) if var_p > 0 else 0.0
+        if std_p > 0:
+            sharpe = round(mean_p / std_p, 3)
+
+    # Human-friendly exposures (join names)
+    set_names = {s.id: s.name for s in db.query(BetSet).all()}
+    bm_names = {b.id: b.name for b in db.query(Bookmaker).all()}
+
+    exposure_by_set = [{"name": set_names.get(k, str(k)), "stake": round(v, 2)} for k, v in sorted(expo_set.items(), key=lambda x: x[0])]
+    exposure_by_bookmaker = [{"name": bm_names.get(k, str(k)), "stake": round(v, 2)} for k, v in sorted(expo_bm.items(), key=lambda x: x[0])]
+
+    return {
+        "hours": hours,
+        "summary": {
+            "sharpe": sharpe,
+            "max_drawdown": max_drawdown,
+            "var95": var95,
+            "n": len(profits)
+        },
+        "daily_pl": daily_pl,
+        "exposure_by_set": exposure_by_set,
+        "exposure_by_bookmaker": exposure_by_bookmaker
+    }
+
+2) MODIFY: app/main.py — include the new router
+-----------------------------------------------
+# add with other imports
+from app.routers.risk import router as risk_router
+
+# include after other app.include_router(...) calls
+app.include_router(risk_router)
+
+============================================================
+FRONTEND (React + Tailwind + Recharts)
+============================================================
+
+3) NEW FILE: web/src/components/Modal.tsx
+-----------------------------------------
+export default function Modal({ open, onClose, title, children, onConfirm, confirmLabel="Confirm" }:{
+  open: boolean; onClose: ()=>void; title: string; children: React.ReactNode; onConfirm?: ()=>void; confirmLabel?: string;
+}){
+  if(!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose}></div>
+      <div className="relative card w-full max-w-md">
+        <div className="text-lg font-semibold mb-2">{title}</div>
+        <div className="text-sm text-mut mb-4">{children}</div>
+        <div className="flex gap-2 justify-end">
+          <button className="px-3 py-2 rounded-xl border border-line" onClick={onClose}>Cancel</button>
+          {onConfirm && <button className="btn px-3 py-2 rounded-xl" onClick={onConfirm}>{confirmLabel}</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+4) NEW FILE: web/src/routes/Risk.tsx
+------------------------------------
+import { useEffect, useState } from "react";
+import { Card, CardTitle } from "@/components/Card";
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar } from "recharts";
+
+type RiskResp = {
+  hours:number;
+  summary:{ sharpe:number|null; max_drawdown:number|null; var95:number|null; n:number };
+  daily_pl: { date:string; pl:number }[];
+  exposure_by_set: { name:string; stake:number }[];
+  exposure_by_bookmaker: { name:string; stake:number }[];
+};
+
+export default function Risk(){
+  const [hours, setHours] = useState(720);
+  const [data, setData] = useState<RiskResp | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load(){
+    setErr(null);
+    try{
+      const r = await fetch(`/stats/risk?hours=${hours}`, { headers: { Authorization: "Bearer "+localStorage.getItem("token") } });
+      if(!r.ok) throw new Error(await r.text());
+      setData(await r.json());
+    }catch(e:any){ setErr(e.message || "Failed to load"); }
+  }
+  useEffect(()=>{ load(); }, [hours]);
+
+  return (
+    <div className="grid gap-6">
+      <div className="card flex items-center justify-between">
+        <div className="font-semibold">Risk Management</div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-mut">Hours</span>
+          <input className="w-24" type="number" value={hours} onChange={e=>setHours(Number(e.target.value || 720))}/>
+          <button className="btn rounded-xl" onClick={load}>Refresh</button>
+        </div>
+      </div>
+
+      {err && <div className="card" style={{color:"#ff8e8e"}}>{err}</div>}
+
+      {data && <>
+        <div className="grid md:grid-cols-3 gap-4">
+          <Card><CardTitle>Sharpe Ratio</CardTitle><div className="text-3xl font-bold">{data.summary.sharpe ?? "—"}</div><div className="text-sm text-mut">Per-bet Sharpe (RF=0)</div></Card>
+          <Card><CardTitle>Max Drawdown</CardTitle><div className="text-3xl font-bold">{data.summary.max_drawdown ?? "—"}</div><div className="text-sm text-mut">Peak-to-trough of cumulative P/L</div></Card>
+          <Card><CardTitle>VaR (95%)</CardTitle><div className="text-3xl font-bold">{data.summary.var95 ?? "—"}</div><div className="text-sm text-mut">Historical per-bet VaR</div></Card>
+        </div>
+
+        <Card>
+          <CardTitle>P/L over Time</CardTitle>
+          <div className="h-72 mt-2">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={data.daily_pl}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis />
+                <Tooltip />
+                <Line type="monotone" dataKey="pl" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <Card>
+            <CardTitle>Exposure by Set</CardTitle>
+            <div className="h-64 mt-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={data.exposure_by_set}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="stake" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+
+          <Card>
+            <CardTitle>Exposure by Bookmaker</CardTitle>
+            <div className="h-64 mt-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={data.exposure_by_bookmaker}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="stake" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        </div>
+      </>}
+    </div>
+  );
+}
+
+5) MODIFY: web/src/components/Sidebar.tsx — add “Risk” link
+-----------------------------------------------------------
+import { Link, useLocation } from "react-router-dom";
+import { getRole, hasAuth } from "@/auth";
+import { Shield, Upload, Users, Settings2, LayoutDashboard, Activity } from "lucide-react";  // + Activity
+
+export default function Sidebar(){
+  const loc = useLocation();
+  const role = getRole();
+  const active = (p:string) => loc.pathname.includes(p) ? "bg-[#0f1721] border border-line" : "";
+  return (
+    <aside className="h-screen bg-card border-r border-line p-4 flex flex-col gap-3">
+      <div className="flex items-center gap-2 mb-2">
+        <Shield className="text-acc" />
+        <div className="font-bold">bet-ocr-app</div>
+      </div>
+      {hasAuth() ? (
+        <>
+          <Link className={`card py-3 flex items-center gap-3 ${active("dashboard")}`} to="/admin/dashboard"><LayoutDashboard size={18}/> Dashboard</Link>
+          <Link className={`card py-3 flex items-center gap-3 ${active("risk")}`} to="/admin/risk"><Activity size={18}/> Risk</Link>
+          <Link className={`card py-3 flex items-center gap-3 ${active("upload")}`} to="/admin/upload"><Upload size={18}/> Upload</Link>
+          {role==="admin" && <>
+            <Link className={`card py-3 flex items-center gap-3 ${active("users")}`} to="/admin/users"><Users size={18}/> Users</Link>
+            <Link className={`card py-3 flex items-center gap-3 ${active("sets")}`} to="/admin/sets"><Settings2 size={18}/> Sets</Link>
+          </>}
+        </>
+      ) : (
+        <Link className={`card py-3 flex items-center gap-3 ${active("login")}`} to="/admin/login"><Shield size={18}/> Login</Link>
+      )}
+      <div className="mt-auto text-xs text-mut">v0.3.0</div>
+    </aside>
+  );
+}
+
+6) MODIFY: web/src/main.tsx — register the Risk route
+-----------------------------------------------------
+import Risk from "./routes/Risk";
+...
+<Route path="risk" element={<Risk/>} />
+
+7) MODIFY: web/src/routes/Upload.tsx — add confirm modal before upload
+----------------------------------------------------------------------
+import { useEffect, useState } from "react";
+import { fetchSets, uploadBet } from "@/api";
+import Dropzone from "@/components/Dropzone";
+import { Card, CardTitle } from "@/components/Card";
+import { useToast } from "@/components/Toast";
+import Modal from "@/components/Modal";
+
+type SetItem = { id:number; name:string; is_active:boolean };
+
+export default function Upload(){
+  const [sets,setSets]=useState<SetItem[]>([]);
+  const [setId,setSetId]=useState<number|undefined>();
+  const [bookmaker,setBk]=useState("Sportsbet");
+  const [stake,setStake]=useState("");
+  const [file,setFile]=useState<File|null>(null);
+  const [preview,setPreview]=useState<string|undefined>();
+  const [out,setOut]=useState<any>(null);
+  const { push } = useToast();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  useEffect(()=>{ (async()=>{
+    try{
+      const s = await fetchSets(true);
+      setSets(s); if(s.length) setSetId(s[0].id);
+    }catch(e:any){ push({ msg: e.message, type:"err"}); }
+  })(); }, []);
+
+  async function actuallyUpload(){
+    if(!file || !setId || !stake){ push({ msg:"All fields required", type:"err"}); return; }
+    const fd = new FormData();
+    fd.append("set_id", String(setId));
+    fd.append("bookmaker_name", bookmaker);
+    fd.append("stake_manual", stake);
+    fd.append("image", file);
+    try{
+      const resp = await uploadBet(fd);
+      setOut(resp);
+      push({ msg: "Bet uploaded", type: "ok" });
+    }catch(err:any){ push({ msg: err.message || "Upload failed", type:"err"}); }
+  }
+
+  const submit = async (e:React.FormEvent) => {
+    e.preventDefault();
+    if(!file || !setId || !stake){ push({ msg:"All fields required", type:"err"}); return; }
+    setConfirmOpen(true);
+  };
+
+  return (
+    <div className="grid gap-6">
+      <Card>
+        <CardTitle>Upload betslip</CardTitle>
+        <form className="grid md:grid-cols-2 gap-4 mt-2" onSubmit={submit}>
+          <label className="grid gap-1">
+            <span className="text-sm text-mut">Set</span>
+            <select value={setId} onChange={e=>setSetId(Number(e.target.value))}>
+              {sets.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-sm text-mut">Bookmaker</span>
+            <input value={bookmaker} onChange={e=>setBk(e.target.value)} />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-sm text-mut">Stake (manual)</span>
+            <input type="number" step="0.01" value={stake} onChange={e=>setStake(e.target.value)} />
+          </label>
+          <div className="grid gap-2">
+            <span className="text-sm text-mut">Screenshot</span>
+            <Dropzone onFile={(f)=>{ setFile(f); setPreview(URL.createObjectURL(f)); }} />
+            <input type="file" accept="image/*" onChange={e=>{ const f=e.target.files?.[0]; if(f){ setFile(f); setPreview(URL.createObjectURL(f)); }}}/>
+          </div>
+          <div className="md:col-span-2">
+            <button className="btn px-4 py-2 rounded-xl">Upload</button>
+          </div>
+        </form>
+      </Card>
+
+      {preview && <Card><CardTitle>Preview</CardTitle><img src={preview} className="rounded-xl border border-line mt-2 max-h-[360px] object-contain"/></Card>}
+      {out && <Card><CardTitle>Parsed result</CardTitle><pre className="mt-2 text-sm overflow-auto">{JSON.stringify(out,null,2)}</pre></Card>}
+
+      <Modal
+        open={confirmOpen}
+        onClose={()=>setConfirmOpen(false)}
+        title="Confirm Upload"
+        onConfirm={()=>{ setConfirmOpen(false); actuallyUpload(); }}
+        confirmLabel="Upload"
+      >
+        <div className="space-y-2">
+          <div><span className="text-mut">Set:</span> {sets.find(s=>s.id===setId)?.name || "—"}</div>
+          <div><span className="text-mut">Bookmaker:</span> {bookmaker}</div>
+          <div><span className="text-mut">Stake:</span> {stake}</div>
+          <div><span className="text-mut">File:</span> {file?.name || "—"}</div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+============================================================
+BUILD / RUN
+============================================================
+1) Backend
+- No new deps. Restart the FastAPI server after saving files.
+
+2) Frontend
+- From project root:
+    cd web
+    npm run build
+- Serve at /admin; new **Risk** link appears in the sidebar.
+
+============================================================
+WHAT YOU GET
+============================================================
+- **/stats/risk** (backend):
+  - `summary.sharpe`: per-bet Sharpe (RF=0)
+  - `summary.max_drawdown`: peak-to-trough on cumulative P/L
+  - `summary.var95`: historical VaR at 95% on per-bet profits
+  - `daily_pl[]`: date-indexed P/L for the timeframe
+  - `exposure_by_set[]`, `exposure_by_bookmaker[]`: stake concentration
+  - `?hours=` to change window (defaults to 720h = 30 days)
+
+- **Risk Panel (frontend)** at `/admin/risk`:
+  - KPI cards for Sharpe / Max Drawdown / VaR(95%)
+  - Line chart: P/L over time
+  - Bar charts: exposure by Set and by Bookmaker
+  - Hours selector + Refresh
+
+- **Confirm Upload Popup**:
+  - Shows set/bookmaker/stake/filename
+  - “Cancel” or “Upload” before sending to `/bets/upload`

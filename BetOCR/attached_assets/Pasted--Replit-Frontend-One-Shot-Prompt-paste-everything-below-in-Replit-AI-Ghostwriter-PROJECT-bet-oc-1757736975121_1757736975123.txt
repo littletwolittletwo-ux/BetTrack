@@ -1,0 +1,711 @@
+🚀 Replit Frontend One-Shot Prompt (paste everything below in Replit AI/Ghostwriter)
+PROJECT: bet-ocr-app / web (Vite + React + TS)
+
+Create a Vite React TypeScript SPA in directory `web/` with the following files and content. After building, copy `dist` into `app/static/admin` so FastAPI serves the admin.
+
+web/
+├─ package.json
+├─ tsconfig.json
+├─ vite.config.ts
+├─ index.html
+├─ src/
+│  ├─ main.tsx
+│  ├─ App.tsx
+│  ├─ api.ts
+│  ├─ auth.ts
+│  ├─ styles.css
+│  ├─ components/
+│  │  ├─ NavBar.tsx
+│  │  ├─ KPICards.tsx
+│  │  └─ Protected.tsx
+│  └─ routes/
+│     ├─ Login.tsx
+│     ├─ Upload.tsx
+│     ├─ AdminDashboard.tsx
+│     ├─ Users.tsx
+│     └─ Sets.tsx
+
+Also add an npm script "postbuild" that copies `web/dist` to `app/static/admin`.
+
+-------------------------
+FILE: web/package.json
+-------------------------
+{
+  "name": "bet-ocr-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "postbuild": "rm -rf ../app/static/admin && mkdir -p ../app/static && cp -r dist ../app/static/admin",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.26.1",
+    "recharts": "2.12.7"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "@types/node": "22.5.2",
+    "typescript": "5.5.4",
+    "vite": "5.4.3"
+  }
+}
+
+-------------------------
+FILE: web/tsconfig.json
+-------------------------
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src"]
+}
+
+-------------------------
+FILE: web/vite.config.ts
+-------------------------
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      "/auth": "http://localhost:8000",
+      "/bets": "http://localhost:8000",
+      "/stats": "http://localhost:8000",
+      "/admin": "http://localhost:8000",
+      "/files": "http://localhost:8000"
+    }
+  },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true
+  }
+});
+
+-------------------------
+FILE: web/index.html
+-------------------------
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>bet-ocr-app</title>
+    <link rel="stylesheet" href="/static/admin/styles.css" onerror="this.href='/static/styles.css'">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/static/admin/assets/main.js" onerror="this.src='/src/main.tsx'"></script>
+  </body>
+</html>
+
+-------------------------
+FILE: web/src/styles.css
+-------------------------
+:root{ --bg:#0b0d12; --card:#11151b; --muted:#7b8a9a; --text:#e6eef7; --accent:#5aa9ff; }
+*{ box-sizing:border-box; }
+body{ margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:var(--bg); color:var(--text); }
+a{ color:var(--accent); text-decoration:none; }
+.container{ max-width:1100px; margin:0 auto; padding:24px; }
+.card{ background:var(--card); border:1px solid #1b222c; border-radius:12px; padding:16px; }
+.input, select, button{ padding:10px 12px; border-radius:8px; border:1px solid #2a3240; background:#0f1318; color:var(--text); }
+.input:focus, select:focus{ outline:1px solid var(--accent); }
+.btn{ background:var(--accent); color:#051423; border:none; cursor:pointer; }
+.grid{ display:grid; gap:16px; }
+.grid-2{ grid-template-columns: repeat(2, 1fr); }
+.grid-3{ grid-template-columns: repeat(3, 1fr); }
+.row{ display:flex; gap:12px; align-items:center; }
+.table{ width:100%; border-collapse: collapse; }
+.table th, .table td{ border-bottom:1px solid #1f2732; padding:10px; text-align:left; }
+.badge{ padding:4px 8px; border-radius:999px; background:#1c2430; color:#a9bccf; font-size:12px; }
+
+-------------------------
+FILE: web/src/api.ts
+-------------------------
+export type Token = { access_token: string; role: "admin"|"employee" };
+
+const BASE = ""; // proxy to 8000 in dev; served by FastAPI in prod
+
+function authHeader() {
+  const t = localStorage.getItem("token");
+  return t ? { Authorization: "Bearer " + t } : {};
+}
+
+export async function login(username: string, password: string): Promise<Token> {
+  const r = await fetch(`${BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password })
+  });
+  if (!r.ok) throw new Error("Login failed");
+  return r.json();
+}
+
+export async function fetchSets(active?: boolean) {
+  const url = new URL(`${BASE}/admin/sets`, location.origin);
+  if (active !== undefined) url.searchParams.set("active", String(active));
+  const r = await fetch(url.toString().replace(location.origin, ""), { headers: { ...authHeader() } });
+  if (!r.ok) throw new Error("Failed to load sets");
+  return r.json();
+}
+
+export async function createSet(name: string) {
+  const r = await fetch(`/admin/sets`, { method:"POST", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify({ name }) });
+  if (!r.ok) throw new Error("Create set failed");
+  return r.json();
+}
+
+export async function renameSet(id:number, name:string) {
+  const r = await fetch(`/admin/sets/${id}`, { method:"PUT", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify({ name }) });
+  if (!r.ok) throw new Error("Rename set failed");
+  return r.json();
+}
+
+export async function toggleSet(id:number, is_active:boolean) {
+  const r = await fetch(`/admin/sets/${id}/status`, { method:"PATCH", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify({ is_active }) });
+  if (!r.ok) throw new Error("Toggle set failed");
+  return r.json();
+}
+
+export async function listUsers(params?: { role?: string; active?: boolean }) {
+  const url = new URL(`/admin/users`, location.origin);
+  if (params?.role) url.searchParams.set("role", params.role);
+  if (params?.active !== undefined) url.searchParams.set("active", String(params.active));
+  const r = await fetch(url.toString().replace(location.origin, ""), { headers: { ...authHeader() } });
+  if (!r.ok) throw new Error("Fetch users failed");
+  return r.json();
+}
+
+export async function createUser(username:string, password:string, role:"admin"|"employee") {
+  const r = await fetch(`/admin/users`, { method:"POST", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify({ username, password, role }) });
+  if (!r.ok) throw new Error("Create user failed");
+  return r.json();
+}
+
+export async function updateUser(id:number, payload: { username?:string; role?: "admin"|"employee" }) {
+  const r = await fetch(`/admin/users/${id}`, { method:"PUT", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify(payload) });
+  if (!r.ok) throw new Error("Update user failed");
+  return r.json();
+}
+
+export async function patchUserStatus(id:number, is_active:boolean) {
+  const r = await fetch(`/admin/users/${id}/status`, { method:"PATCH", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify({ is_active }) });
+  if (!r.ok) throw new Error("Patch user failed");
+  return r.json();
+}
+
+export async function resetPassword(id:number, password:string) {
+  const r = await fetch(`/admin/users/${id}/password`, { method:"POST", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify({ password }) });
+  if (!r.ok) throw new Error("Reset PW failed");
+  return r.json();
+}
+
+export async function uploadBet(form: FormData) {
+  const r = await fetch(`/bets/upload`, { method:"POST", headers:{ ...authHeader() }, body: form });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function setStats(hours=72) {
+  const r = await fetch(`/stats/sets?hours=${hours}`, { headers:{ ...authHeader() } });
+  if (!r.ok) throw new Error("Stats failed");
+  return r.json();
+}
+
+-------------------------
+FILE: web/src/auth.ts
+-------------------------
+export function saveAuth(token: string, role: "admin"|"employee") {
+  localStorage.setItem("token", token);
+  localStorage.setItem("role", role);
+}
+export function logout() {
+  localStorage.removeItem("token");
+  localStorage.removeItem("role");
+  location.href = "/admin/";
+}
+export function getRole(): "admin"|"employee"|null {
+  return (localStorage.getItem("role") as any) || null;
+}
+export function hasAuth() {
+  return !!localStorage.getItem("token");
+}
+
+-------------------------
+FILE: web/src/main.tsx
+-------------------------
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import App from "./App";
+import "./styles.css";
+import Login from "./routes/Login";
+import Upload from "./routes/Upload";
+import AdminDashboard from "./routes/AdminDashboard";
+import Users from "./routes/Users";
+import Sets from "./routes/Sets";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <BrowserRouter basename="/admin">
+      <Routes>
+        <Route path="/" element={<App />}>
+          <Route index element={<Navigate to="dashboard" />} />
+          <Route path="login" element={<Login />} />
+          <Route path="upload" element={<Upload />} />
+          <Route path="dashboard" element={<AdminDashboard />} />
+          <Route path="users" element={<Users />} />
+          <Route path="sets" element={<Sets />} />
+          <Route path="*" element={<Navigate to="dashboard" />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  </React.StrictMode>
+);
+
+-------------------------
+FILE: web/src/components/NavBar.tsx
+-------------------------
+import { Link, useLocation } from "react-router-dom";
+import { getRole, hasAuth, logout } from "@/auth";
+
+export default function NavBar(){
+  const loc = useLocation();
+  const role = getRole();
+  const active = (p:string) => loc.pathname.includes(p) ? { color: "white" } : {};
+  return (
+    <div className="card" style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <div className="row" style={{gap:16}}>
+        <Link to="/admin/dashboard" style={active("dashboard")}>Dashboard</Link>
+        {role==="employee" && <Link to="/admin/upload" style={active("upload")}>Upload</Link>}
+        {role==="admin" && <>
+          <Link to="/admin/users" style={active("users")}>Users</Link>
+          <Link to="/admin/sets" style={active("sets")}>Sets</Link>
+        </>}
+      </div>
+      <div className="row" style={{gap:12}}>
+        {!hasAuth() ? <Link to="/admin/login" className="btn">Login</Link> :
+          <>
+            <span className="badge">{role}</span>
+            <button className="btn" onClick={logout}>Logout</button>
+          </>
+        }
+      </div>
+    </div>
+  );
+}
+
+-------------------------
+FILE: web/src/components/KPICards.tsx
+-------------------------
+type KPIProps = { label:string; value:string|number; sub?:string };
+export function KPI({label, value, sub}: KPIProps){
+  return <div className="card">
+    <div style={{fontSize:12, color:"var(--muted)"}}>{label}</div>
+    <div style={{fontSize:24, fontWeight:700}}>{value}</div>
+    {sub && <div style={{fontSize:12, color:"var(--muted)"}}>{sub}</div>}
+  </div>;
+}
+export default function KPICards({items}:{items: KPIProps[]}) {
+  return <div className="grid grid-3">{items.map((k,i)=><KPI key={i} {...k}/>)}</div>;
+}
+
+-------------------------
+FILE: web/src/components/Protected.tsx
+-------------------------
+import { ReactNode } from "react";
+import { hasAuth, getRole } from "@/auth";
+import { Navigate } from "react-router-dom";
+
+export function Protected({ children, allow }: { children: ReactNode; allow: ("admin"|"employee")[] }) {
+  if (!hasAuth()) return <Navigate to="/admin/login" replace />;
+  const role = getRole();
+  if (!role || !allow.includes(role)) return <Navigate to="/admin/login" replace />;
+  return <>{children}</>;
+}
+
+-------------------------
+FILE: web/src/App.tsx
+-------------------------
+import { Outlet, useNavigate, useLocation } from "react-router-dom";
+import NavBar from "./components/NavBar";
+import { hasAuth } from "./auth";
+
+export default function App(){
+  const nav = useNavigate();
+  const loc = useLocation();
+  if (!hasAuth() && !loc.pathname.includes("/login")) {
+    // allow viewing dashboard anonymously? -> no, force login
+  }
+  return (
+    <div className="container">
+      <NavBar />
+      <Outlet />
+    </div>
+  );
+}
+
+-------------------------
+FILE: web/src/routes/Login.tsx
+-------------------------
+import { useState } from "react";
+import { login } from "@/api";
+import { saveAuth } from "@/auth";
+import { useNavigate } from "react-router-dom";
+
+export default function Login(){
+  const [u,setU]=useState("admin");
+  const [p,setP]=useState("dwang1237");
+  const [err,setErr]=useState<string|null>(null);
+  const nav = useNavigate();
+
+  const submit = async (e:React.FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    try{
+      const tok = await login(u,p);
+      saveAuth(tok.access_token, tok.role);
+      nav("/admin/dashboard");
+    }catch(e:any){
+      setErr(e.message || "Login failed");
+    }
+  };
+
+  return (
+    <div className="card" style={{maxWidth:420, margin:"40px auto"}}>
+      <h3>Login</h3>
+      <form onSubmit={submit} className="grid">
+        <input className="input" placeholder="Username" value={u} onChange={e=>setU(e.target.value)}/>
+        <input className="input" type="password" placeholder="Password" value={p} onChange={e=>setP(e.target.value)}/>
+        <button className="btn">Login</button>
+        {err && <div style={{color:"#ff8e8e"}}>{err}</div>}
+      </form>
+      <div style={{marginTop:8, color:"var(--muted)"}}>Tip: dev accounts are seeded.</div>
+    </div>
+  );
+}
+
+-------------------------
+FILE: web/src/routes/Upload.tsx
+-------------------------
+import { useEffect, useState } from "react";
+import { fetchSets, uploadBet } from "@/api";
+import { Protected } from "@/components/Protected";
+
+type SetItem = { id:number; name:string; is_active:boolean };
+
+function Inner(){
+  const [sets, setSets] = useState<SetItem[]>([]);
+  const [setId, setSetId] = useState<number|undefined>(undefined);
+  const [bookmaker, setBk] = useState("Sportsbet");
+  const [stake, setStake] = useState<string>("");
+  const [file, setFile] = useState<File|null>(null);
+  const [out, setOut] = useState<any>(null);
+  const [err, setErr] = useState<string|null>(null);
+
+  useEffect(()=>{ (async()=>{
+    const s = await fetchSets(true);
+    setSets(s);
+    if (s.length) setSetId(s[0].id);
+  })(); }, []);
+
+  const submit = async (e:React.FormEvent) => {
+    e.preventDefault();
+    setErr(null); setOut(null);
+    if (!file || !setId || !stake) { setErr("All fields required"); return; }
+    const fd = new FormData();
+    fd.append("set_id", String(setId));
+    fd.append("bookmaker_name", bookmaker);
+    fd.append("stake_manual", stake);
+    fd.append("image", file);
+    try{
+      const resp = await uploadBet(fd);
+      setOut(resp);
+    }catch(e:any){
+      setErr(e.message || "Upload failed");
+    }
+  };
+
+  return (
+    <div className="card">
+      <h3>Upload Bet</h3>
+      <form onSubmit={submit} className="grid">
+        <label>Set</label>
+        <select value={setId} onChange={e=>setSetId(Number(e.target.value))}>
+          {sets.map(s=> <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <label>Bookmaker</label>
+        <input className="input" value={bookmaker} onChange={e=>setBk(e.target.value)} />
+        <label>Stake (manual)</label>
+        <input className="input" type="number" step="0.01" value={stake} onChange={e=>setStake(e.target.value)} />
+        <label>Screenshot</label>
+        <input className="input" type="file" accept="image/*" onChange={e=>setFile(e.target.files?.[0]||null)} />
+        <button className="btn">Upload</button>
+      </form>
+      {err && <div style={{color:"#ff8e8e", marginTop:10}}>{err}</div>}
+      {out && <pre style={{whiteSpace:"pre-wrap", marginTop:10}}>{JSON.stringify(out,null,2)}</pre>}
+    </div>
+  );
+}
+
+export default function Upload(){
+  return <Protected allow={["employee","admin"]}><Inner/></Protected>;
+}
+
+-------------------------
+FILE: web/src/routes/AdminDashboard.tsx
+-------------------------
+import { useEffect, useState } from "react";
+import { setStats } from "@/api";
+import KPICards from "@/components/KPICards";
+import { Protected } from "@/components/Protected";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+
+type SetStat = { set_id:number; total_bets:number; wins:number; net_profit:number; avg_roi:number|null };
+
+function Inner(){
+  const [hours, setHours] = useState(72);
+  const [data, setData] = useState<SetStat[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string|null>(null);
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try { setData(await setStats(hours)); }
+    catch(e:any){ setErr(e.message || "Error"); }
+    finally{ setLoading(false); }
+  };
+
+  useEffect(()=>{ load(); }, [hours]);
+
+  const totals = {
+    bets: data.reduce((s,x)=>s+x.total_bets,0),
+    wins: data.reduce((s,x)=>s+x.wins,0),
+    profit: data.reduce((s,x)=>s+Number(x.net_profit||0),0).toFixed(2),
+    roi: (() => {
+      const rois = data.map(x => x.avg_roi || 0).filter(x=>x);
+      return rois.length ? (100*rois.reduce((s,x)=>s+x,0)/rois.length).toFixed(1)+"%" : "—";
+    })()
+  };
+
+  return (
+    <div className="grid">
+      <div className="card row" style={{justifyContent:"space-between"}}>
+        <div className="row" style={{gap:8}}>
+          <label>Timeframe (hours)</label>
+          <input className="input" type="number" value={hours} onChange={e=>setHours(Number(e.target.value||72))}/>
+          <button className="btn" onClick={load}>Refresh</button>
+        </div>
+      </div>
+
+      <KPICards items={[
+        {label:"Total Bets", value: totals.bets},
+        {label:"Wins", value: totals.wins},
+        {label:"Net Profit (A$)", value: totals.profit},
+        {label:"Avg ROI", value: totals.roi}
+      ]} />
+
+      <div className="card" style={{height:360}}>
+        {loading ? "Loading..." : err ? <div style={{color:"#ff8e8e"}}>{err}</div> :
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data.map(d=>({name:"Set "+d.set_id, profit:Number(d.net_profit||0)}))}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name"/>
+              <YAxis />
+              <Tooltip/>
+              <Bar dataKey="profit" />
+            </BarChart>
+          </ResponsiveContainer>
+        }
+      </div>
+    </div>
+  );
+}
+
+export default function AdminDashboard(){
+  return <Protected allow={["admin","employee"]}><Inner/></Protected>;
+}
+
+-------------------------
+FILE: web/src/routes/Users.tsx
+-------------------------
+import { useEffect, useState } from "react";
+import { listUsers, createUser, updateUser, patchUserStatus, resetPassword } from "@/api";
+import { Protected } from "@/components/Protected";
+
+type User = { id:number; username:string; role:"admin"|"employee"; is_active:boolean };
+
+function Inner(){
+  const [users,setUsers]=useState<User[]>([]);
+  const [err,setErr]=useState<string|null>(null);
+  const [u,setU]=useState(""); const [p,setP]=useState(""); const [r,setR]=useState<"admin"|"employee">("employee");
+
+  const load=async()=>{ try{ setUsers(await listUsers()); }catch(e:any){ setErr(e.message);} };
+  useEffect(()=>{ load(); },[]);
+
+  const createU=async()=>{ setErr(null); try{ await createUser(u,p,r); setU(""); setP(""); await load(); }catch(e:any){ setErr(e.message);} };
+  const toggle=async(id:number, active:boolean)=>{ await patchUserStatus(id, active); await load(); };
+  const makeAdmin=async(id:number)=>{ await updateUser(id,{role:"admin"}); await load(); };
+  const makeEmployee=async(id:number)=>{ await updateUser(id,{role:"employee"}); await load(); };
+  const reset=async(id:number)=>{ const pw=prompt("New password:"); if(!pw) return; await resetPassword(id,pw); alert("Password updated"); };
+
+  return (
+    <div className="grid">
+      <div className="card">
+        <h3>Create User</h3>
+        <div className="row">
+          <input className="input" placeholder="username" value={u} onChange={e=>setU(e.target.value)}/>
+          <input className="input" placeholder="password" value={p} onChange={e=>setP(e.target.value)}/>
+          <select value={r} onChange={e=>setR(e.target.value as any)}>
+            <option value="employee">employee</option>
+            <option value="admin">admin</option>
+          </select>
+          <button className="btn" onClick={createU}>Create</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Users</h3>
+        {err && <div style={{color:"#ff8e8e"}}>{err}</div>}
+        <table className="table">
+          <thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Active</th><th>Actions</th></tr></thead>
+          <tbody>
+            {users.map(u=>
+              <tr key={u.id}>
+                <td>{u.id}</td>
+                <td>{u.username}</td>
+                <td><span className="badge">{u.role}</span></td>
+                <td>{u.is_active ? "Yes":"No"}</td>
+                <td className="row">
+                  {u.role==="admin"
+                    ? <button className="input" onClick={()=>makeEmployee(u.id)}>Make employee</button>
+                    : <button className="input" onClick={()=>makeAdmin(u.id)}>Make admin</button>}
+                  <button className="input" onClick={()=>toggle(u.id, !u.is_active)}>{u.is_active?"Disable":"Enable"}</button>
+                  <button className="input" onClick={()=>reset(u.id)}>Reset PW</button>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export default function Users(){
+  return <Protected allow={["admin"]}><Inner/></Protected>;
+}
+
+-------------------------
+FILE: web/src/routes/Sets.tsx
+-------------------------
+import { useEffect, useState } from "react";
+import { fetchSets, createSet, renameSet, toggleSet } from "@/api";
+import { Protected } from "@/components/Protected";
+
+type SetItem = { id:number; name:string; is_active:boolean };
+
+function Inner(){
+  const [sets,setSets]=useState<SetItem[]>([]);
+  const [name,setName]=useState(""); const [err,setErr]=useState<string|null>(null);
+
+  const load=async()=>{ try{ setSets(await fetchSets()); }catch(e:any){ setErr(e.message);} };
+  useEffect(()=>{ load(); },[]);
+
+  const add=async()=>{ if(!name) return; await createSet(name); setName(""); await load(); };
+  const rename=async(id:number)=>{ const n=prompt("New name:", sets.find(s=>s.id===id)?.name); if(!n) return; await renameSet(id,n); await load(); };
+  const toggle=async(id:number, st:boolean)=>{ await toggleSet(id, st); await load(); };
+
+  return (
+    <div className="grid">
+      <div className="card">
+        <h3>Create Set</h3>
+        <div className="row">
+          <input className="input" placeholder="name (e.g., s)" value={name} onChange={e=>setName(e.target.value)}/>
+          <button className="btn" onClick={add}>Add</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Sets</h3>
+        {err && <div style={{color:"#ff8e8e"}}>{err}</div>}
+        <table className="table">
+          <thead><tr><th>ID</th><th>Name</th><th>Active</th><th>Actions</th></tr></thead>
+          <tbody>
+            {sets.map(s=>
+              <tr key={s.id}>
+                <td>{s.id}</td>
+                <td>{s.name}</td>
+                <td>{s.is_active ? "Yes":"No"}</td>
+                <td className="row">
+                  <button className="input" onClick={()=>rename(s.id)}>Rename</button>
+                  <button className="input" onClick={()=>toggle(s.id, !s.is_active)}>{s.is_active?"Disable":"Enable"}</button>
+                </td>
+              </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export default function Sets(){
+  return <Protected allow={["admin"]}><Inner/></Protected>;
+}
+
+Build & run (quick)
+
+In Replit Shell:
+
+# from project root
+cd web
+npm i
+npm run build   # copies build into ../app/static/admin
+cd ..
+# start FastAPI (if not already)
+pip install -r requirements.txt
+alembic upgrade head
+python scripts/create_defaults.py
+# run button starts: uvicorn app.main:app ...
+
+
+Open your Replit URL → go to /admin (the SPA lives there).
+Log in with your seeded accounts:
+
+admin / dwang1237 (admin)
+
+slave / admin (employee)
+
+You’ll get:
+
+Dashboard: timeframe filter, KPI cards, profit bar chart by Set.
+
+Upload (employee/admin): pick Set, stake, bookmaker, upload screenshot → parsed & saved.
+
+Users (admin): create/disable/reset, change roles.
+
+Sets (admin): create/rename/enable-disable (shows only active Sets in Upload).
+
+If you need me to also wire a Recent Bets t

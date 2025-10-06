@@ -1,0 +1,245 @@
+PROJECT: bet-ocr-app / Upgrade CSV import to accept both legacy and new schemas
+
+Goal:
+- Support TWO CSV schemas in the same endpoint `/import/csv` (admin + employee):
+  1) Legacy: `set,profit`
+  2) New: `stake,odds,profit` (+ optional `set`)
+- If new schema has no `set` column, require `?default_set=<name|id>` query.
+- Keep `dry_run` preview; attribute uploaded rows to the authenticated user.
+- Insert rows as synthetic bets (bookmaker = "CSV Import") so they flow into stats.
+
+Make these changes:
+
+1) REPLACE FILE: app/routers/imports.py
+---------------------------------------
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+import csv, io
+from datetime import datetime
+from typing import Optional
+from app.deps import current_user              # employees & admins
+from app.db.session import get_db
+from app.models.user import User
+from app.models.bet_set import BetSet
+from app.crud.bets import create_bet, get_or_create_bookmaker
+
+router = APIRouter(prefix="/import", tags=["csv-import"])
+
+def _resolve_set_id(db: Session, set_val: Optional[str]) -> Optional[int]:
+    if not set_val:
+        return None
+    s = set_val.strip()
+    if not s:
+        return None
+    if s.isdigit():
+        obj = db.get(BetSet, int(s))
+        return obj.id if obj else None
+    obj = db.query(BetSet).filter(BetSet.name == s).first()
+    return obj.id if obj else None
+
+@router.post("/csv")
+async def import_csv(
+    file: UploadFile = File(...),
+    dry_run: bool = Query(False, description="Validate only; do not write rows"),
+    default_set: Optional[str] = Query(None, description="Fallback set (name or id) for new schema if CSV has no 'set' column"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+
+    # Parse once, normalize headers
+    sio = io.StringIO(text)
+    rdr = csv.DictReader(sio)
+    if not rdr.fieldnames:
+        raise HTTPException(400, "CSV has no header row")
+    headers = [h.strip().lower() for h in rdr.fieldnames]
+
+    has_legacy = {"set", "profit"}.issubset(set(headers)) and not {"stake", "odds"}.issubset(set(headers))
+    has_new = {"stake", "odds", "profit"}.issubset(set(headers))
+
+    if not has_legacy and not has_new:
+        raise HTTPException(
+            400,
+            "CSV must match one of:\n"
+            "  - legacy: set,profit\n"
+            "  - new: stake,odds,profit (optional set)  "
+            "If using new format without a 'set' column, pass ?default_set=<name|id>."
+        )
+
+    # Re-read with normalized keys
+    sio2 = io.StringIO(text)
+    rdr2 = csv.DictReader(sio2)
+    rows = []
+    for r in rdr2:
+        rows.append({(k or '').strip().lower(): (v or '').strip() for k, v in r.items()})
+
+    # Prepare response
+    result = {
+        "filename": file.filename,
+        "mode": "legacy" if has_legacy else "new",
+        "dry_run": dry_run,
+        "total_rows": 0,
+        "inserted": 0,
+        "skipped": 0,
+        "errors": [],
+    }
+
+    # Ensure bookmaker once
+    csv_bookmaker_id = get_or_create_bookmaker(db, "CSV Import")
+
+    # Resolve default set if provided
+    default_set_id = _resolve_set_id(db, default_set) if default_set else None
+
+    for i, row in enumerate(rows, start=2):  # header == 1
+        # Skip blank line
+        if not any(row.values()):
+            continue
+
+        result["total_rows"] += 1
+
+        try:
+            if has_legacy:
+                # ----- Legacy: set,profit -----
+                set_id = _resolve_set_id(db, row.get("set"))
+                if not set_id:
+                    result["skipped"] += 1
+                    result["errors"].append({"row": i, "error": f"Unknown set '{row.get('set')}'"})
+                    continue
+                profit = float(row.get("profit", "").replace(",", ""))
+                if not dry_run:
+                    create_bet(
+                        db,
+                        set_id=set_id,
+                        bookmaker_id=csv_bookmaker_id,
+                        uploaded_by=user.id,
+                        uploaded_at=datetime.utcnow(),
+                        image_path="csv_import",
+                        event_text=f"CSV legacy import: {file.filename}",
+                        bet_type="manual",
+                        odds_numeric=None,
+                        stake_manual=0.0,
+                        potential_return=None,
+                        cashout_amount=None,
+                        commission_rate=None,
+                        result_status="manual",
+                        settled_at=None,
+                        profit=round(profit, 2),
+                        raw_ocr_json=None,
+                        parse_version=2,
+                        last_edited_by=user.id,
+                        last_edited_at=datetime.utcnow(),
+                    )
+                result["inserted"] += 1
+                continue
+
+            # ----- New: stake,odds,profit (+ optional set) -----
+            # set resolution (row set OR default_set query)
+            set_id = _resolve_set_id(db, row.get("set")) or default_set_id
+            if not set_id:
+                result["skipped"] += 1
+                result["errors"].append({"row": i, "error": "Missing set; supply a 'set' column or ?default_set=<name|id>."})
+                continue
+
+            # required numerics
+            stake = float(row.get("stake", "").replace(",", ""))
+            odds = float(row.get("odds", "").replace(",", ""))
+            profit = float(row.get("profit", "").replace(",", ""))
+
+            if not dry_run:
+                create_bet(
+                    db,
+                    set_id=set_id,
+                    bookmaker_id=csv_bookmaker_id,
+                    uploaded_by=user.id,
+                    uploaded_at=datetime.utcnow(),
+                    image_path="csv_import",
+                    event_text=f"CSV new-format import: {file.filename}",
+                    bet_type="manual",
+                    odds_numeric=odds,
+                    stake_manual=stake,
+                    potential_return=None,
+                    cashout_amount=None,
+                    commission_rate=None,
+                    result_status="manual",
+                    settled_at=None,
+                    profit=round(profit, 2),
+                    raw_ocr_json=None,
+                    parse_version=2,
+                    last_edited_by=user.id,
+                    last_edited_at=datetime.utcnow(),
+                )
+            result["inserted"] += 1
+
+        except ValueError as ve:
+            result["skipped"] += 1
+            result["errors"].append({"row": i, "error": f"Invalid numeric value: {ve}"})
+        except Exception as e:
+            result["skipped"] += 1
+            result["errors"].append({"row": i, "error": f"{type(e).__name__}: {e}"})
+
+    return result
+
+
+2) (Optional) Update scripts/smoke.sh with examples (append)
+------------------------------------------------------------
+echo "== CSV import: new schema with default_set (employee) DRY RUN =="
+cat > tests/samples/new_schema_example.csv <<'CSV'
+stake,odds,profit
+25,2.10,27.50
+50,3.00,100.00
+CSV
+curl -s -X POST "$BASE/import/csv?dry_run=true&default_set=s" \
+  -H "Authorization: Bearer $EMP_TOK" \
+  -F file=@tests/samples/new_schema_example.csv | jq .
+
+echo "== CSV import: legacy schema (employee) DRY RUN =="
+cat > tests/samples/legacy_example.csv <<'CSV'
+set,profit
+s,25
+c,-10.5
+CSV
+curl -s -X POST "$BASE/import/csv?dry_run=true" \
+  -H "Authorization: Bearer $EMP_TOK" \
+  -F file=@tests/samples/legacy_example.csv | jq .
+
+
+3) (Optional) README.md usage block (append)
+--------------------------------------------
+## CSV Import Schemas (Employee/Admin)
+Endpoint: `POST /import/csv?dry_run=true|false[&default_set=<name|id>]`
+Multipart: `file=<your.csv>`
+
+**New schema (preferred):**
+stake,odds,profit[,set]
+
+markdown
+Copy code
+- If `set` column is missing, pass `?default_set=s` (or a numeric id like `?default_set=2`).
+- Rows are inserted with `stake_manual=stake`, `odds_numeric=odds`, `profit=profit`.
+
+**Legacy schema (still supported):**
+set,profit
+
+pgsql
+Copy code
+- Rows are inserted with `stake_manual=0` and `profit` as provided.
+
+Both schemas create **synthetic bets** with bookmaker **"CSV Import"** that flow into `/stats/sets` and `/bets/recent`.
+Quick checks
+Restart the app and try:
+
+bash
+Copy code
+# new schema (use default_set for all rows)
+curl -X POST "http://localhost:8000/import/csv?dry_run=true&default_set=s" \
+  -H "Authorization: Bearer <EMPLOYEE_JWT>" \
+  -F file=@tests/samples/new_schema_example.csv
+
+# legacy schema (still works)
+curl -X POST "http://localhost:8000/import/csv?dry_run=true" \
+  -H "Authorization: Bearer <EMPLOYEE_JWT>" \
+  -F file=@tests/samples/legacy_example.csv

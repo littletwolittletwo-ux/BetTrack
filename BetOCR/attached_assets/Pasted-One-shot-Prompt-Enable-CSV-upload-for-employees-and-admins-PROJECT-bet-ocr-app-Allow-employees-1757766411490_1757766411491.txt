@@ -1,0 +1,170 @@
+One-shot Prompt: Enable CSV upload for employees (and admins)
+PROJECT: bet-ocr-app / Allow employees to upload CSV imports
+
+Goal:
+- Let both **admin** and **employee** roles upload a CSV with columns `set,profit`.
+- Endpoint becomes **/import/csv** (no /admin prefix) so both roles can reach it.
+- Each CSV row creates a synthetic bet (stake_manual=0, result_status="manual", bookmaker="CSV Import").
+- Keep `dry_run` preview.
+- Record `uploaded_by = current_user.id` for proper attribution.
+
+Make the following changes:
+
+1) REPLACE FILE: app/routers/imports.py  (allow both roles; new prefix /import)
+---------------------------------------------------------------------------
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+import csv, io
+from datetime import datetime
+from app.deps import current_user  # <-- both roles allowed
+from app.db.session import get_db
+from app.models.bet_set import BetSet
+from app.models.user import User
+from app.crud.bets import create_bet, get_or_create_bookmaker
+
+router = APIRouter(prefix="/import", tags=["csv-import"])
+
+def _resolve_set_id(db: Session, set_value: str) -> int | None:
+    set_value = (set_value or "").strip()
+    if not set_value:
+        return None
+    if set_value.isdigit():
+        s = db.get(BetSet, int(set_value))
+        return s.id if s else None
+    s = db.query(BetSet).filter(BetSet.name == set_value).first()
+    return s.id if s else None
+
+@router.post("/csv")
+async def import_csv(
+    file: UploadFile = File(...),
+    dry_run: bool = Query(False, description="If true, parse & validate without inserting"),
+    user: User = Depends(current_user),         # <-- admin or employee
+    db: Session = Depends(get_db),
+):
+    # Basic size guard (optional)
+    if file.size and file.size > 5 * 1024 * 1024:
+        raise HTTPException(413, "CSV exceeds 5MB limit")
+
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+
+    # Normalize headers to lower
+    sio = io.StringIO(text)
+    rdr = csv.DictReader(sio)
+    if not rdr.fieldnames:
+        raise HTTPException(400, "CSV has no header row")
+    headers_lower = [h.strip().lower() for h in rdr.fieldnames]
+    required = {"set", "profit"}
+    if not required.issubset(set(headers_lower)):
+        raise HTTPException(400, f"CSV must contain headers: {', '.join(sorted(required))}")
+
+    # Re-read to ensure normalized keys
+    sio2 = io.StringIO(text)
+    rdr2 = csv.DictReader(sio2)
+    rows = []
+    for row in rdr2:
+        rows.append({(k or "").strip().lower(): (v or "").strip() for k, v in row.items()})
+
+    result = {"filename": file.filename, "dry_run": dry_run, "total_rows": 0, "inserted": 0, "skipped": 0, "errors": []}
+    csv_bookmaker_id = get_or_create_bookmaker(db, "CSV Import")
+
+    for idx, row in enumerate(rows, start=2):  # header at 1
+        if not row or (not row.get("set") and not row.get("profit")):
+            continue
+        result["total_rows"] += 1
+        set_val = row.get("set", "")
+        profit_raw = (row.get("profit") or "").replace(",", "")
+
+        set_id = _resolve_set_id(db, set_val)
+        if not set_id:
+            result["skipped"] += 1
+            result["errors"].append({"row": idx, "error": f"Unknown set '{set_val}'"})
+            continue
+
+        try:
+            profit = float(profit_raw)
+        except ValueError:
+            result["skipped"] += 1
+            result["errors"].append({"row": idx, "error": f"Invalid profit '{profit_raw}'"})
+            continue
+
+        if dry_run:
+            continue
+
+        create_bet(
+            db,
+            set_id=set_id,
+            bookmaker_id=csv_bookmaker_id,
+            uploaded_by=user.id,                  # <-- attribute to whoever uploads
+            uploaded_at=datetime.utcnow(),
+            image_path="csv_import",
+            event_text=f"CSV import: {file.filename}",
+            bet_type="manual",
+            odds_numeric=None,
+            stake_manual=0.0,
+            potential_return=None,
+            cashout_amount=None,
+            commission_rate=None,
+            result_status="manual",
+            settled_at=None,
+            profit=round(profit, 2),
+            raw_ocr_json=None,
+            parse_version=1,
+            last_edited_by=user.id,
+            last_edited_at=datetime.utcnow(),
+        )
+        result["inserted"] += 1
+
+    return result
+
+
+2) UPDATE FILE: app/main.py  (only if it referenced /admin/import earlier)
+---------------------------------------------------------------------------
+# ensure this import exists near your other routers:
+from app.routers.imports import router as import_router
+
+# and this include call (already present in your app if you added CSV before):
+app.include_router(import_router)
+
+
+3) OPTIONAL: scripts/smoke.sh — add employee CSV example (append)
+-----------------------------------------------------------------
+echo "== CSV dry-run import (employee) =="
+curl -s -X POST "$BASE/import/csv?dry_run=true" \
+  -H "Authorization: Bearer $EMP_TOK" \
+  -F file=@tests/samples/example_import.csv | jq .
+
+
+4) OPTIONAL: README.md — append usage note
+------------------------------------------
+## CSV Import (Admin or Employee)
+Upload a CSV with headers:
+
+
+set,profit
+
+`set` can be the set **name** (s,c,a,o,d,k, etc.) or a **numeric set ID**.
+Endpoint:
+
+
+POST /import/csv?dry_run=true|false
+multipart:
+file=<yourfile.csv>
+
+- Works for both roles; the row is attributed to the uploader (`uploaded_by`).
+- Each row is a synthetic bet with `stake_manual=0`, `result_status="manual"`, bookmaker="CSV Import".
+- Shows up in `/bets/recent` and `/stats/sets` automatically.
+
+
+Quick check
+
+Restart your app (Run).
+
+Try a dry run as employee:
+
+curl -X POST "http://localhost:8000/import/csv?dry_run=true" \
+  -H "Authorization: Bearer <EMPLOYEE_JWT>" \
+  -F file=@tests/samples/example_import.csv

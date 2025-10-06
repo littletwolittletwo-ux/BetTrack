@@ -1,0 +1,1217 @@
+🧱 Replit One-Shot Prompt (paste everything below into Replit AI/Ghostwriter)
+PROJECT: bet-ocr-app
+
+Create the following file tree and fill each file with the provided content.
+
+bet-ocr-app/
+├─ .replit
+├─ replit.nix
+├─ requirements.txt
+├─ .env.example
+├─ README.md
+├─ alembic.ini
+├─ alembic/
+│  ├─ env.py
+│  ├─ script.py.mako
+│  └─ versions/
+│     └─ 0001_init.py
+├─ app/
+│  ├─ main.py
+│  ├─ config.py
+│  ├─ deps.py
+│  ├─ auth/
+│  │  ├─ hashing.py
+│  │  ├─ jwt_tools.py
+│  │  └─ router.py
+│  ├─ db/
+│  │  ├─ base.py
+│  │  ├─ session.py
+│  │  └─ init_data.py
+│  ├─ models/
+│  │  ├─ user.py
+│  │  ├─ bet_set.py
+│  │  ├─ bookmaker.py
+│  │  └─ bet.py
+│  ├─ schemas/
+│  │  ├─ auth.py
+│  │  ├─ users.py
+│  │  ├─ sets.py
+│  │  ├─ bets.py
+│  │  └─ stats.py
+│  ├─ crud/
+│  │  ├─ users.py
+│  │  ├─ sets.py
+│  │  ├─ bets.py
+│  │  └─ stats.py
+│  ├─ routers/
+│  │  ├─ bets.py
+│  │  ├─ stats.py
+│  │  ├─ files.py
+│  │  └─ admin.py
+│  ├─ services/
+│  │  ├─ profit.py
+│  │  └─ ocr/
+│  │     ├─ engine.py
+│  │     ├─ preprocess.py
+│  │     └─ parsers/
+│  │        ├─ common_regex.py
+│  │        ├─ ladbrokes.py
+│  │        ├─ pointsbet.py
+│  │        ├─ sportsbet.py
+│  │        ├─ tab.py
+│  │        ├─ bet365.py
+│  │        └─ betfair.py
+├─ scripts/
+│  ├─ create_defaults.py
+│  └─ create_admin.py
+└─ uploads/   (ensure this exists; add to .gitignore behavior via .replit hidden)
+
+-------------------------
+FILE: .replit
+-------------------------
+run = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+hidden = ["uploads"]
+
+-------------------------
+FILE: replit.nix
+-------------------------
+{ pkgs }: {
+  deps = [
+    pkgs.python311
+    pkgs.python311Packages.pip
+    pkgs.tesseract
+    pkgs.leptonica
+    pkgs.pkg-config
+  ];
+}
+
+-------------------------
+FILE: requirements.txt
+-------------------------
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pillow==10.4.0
+opencv-python-headless==4.10.0.84
+pytesseract==0.3.13
+numpy==2.1.1
+sqlalchemy==2.0.34
+alembic==1.13.2
+psycopg2-binary==2.9.9
+passlib[bcrypt]==1.7.4
+PyJWT==2.9.0
+pydantic-settings==2.4.0
+
+-------------------------
+FILE: .env.example
+-------------------------
+DATABASE_URL=postgresql+psycopg2://USER:PASSWORD@HOST:PORT/DBNAME
+SECRET_KEY=replace_with_random_64_chars
+ACCESS_TOKEN_EXPIRE_MINUTES=43200
+OCR_ENGINE=tesseract
+TESSERACT_CMD=/usr/bin/tesseract
+UPLOAD_DIR=uploads
+BETFAIR_DEFAULT_COMMISSION=0.05
+
+# Default users (used by scripts/create_defaults.py)
+DEFAULT_ADMIN_USERNAME=admin
+DEFAULT_ADMIN_PASSWORD=dwang1237
+DEFAULT_EMPLOYEE_USERNAME=slave
+DEFAULT_EMPLOYEE_PASSWORD=admin
+
+-------------------------
+FILE: README.md
+-------------------------
+# bet-ocr-app
+
+FastAPI app on Replit to OCR bookmaker betslip screenshots, compute profit, and track running stats per Set. Roles: **admin** & **employee**. Admin can manage users & sets, edit any bet, and view stats in a timeframe (default 72h). Employee uploads screenshots, picks a Set (active only), and enters stake manually.
+
+## Quick start
+1. Add secrets in Replit (copy .env.example to Secrets).
+2. Shell:
+
+
+pip install -r requirements.txt
+alembic upgrade head
+python scripts/create_defaults.py
+
+3. Click **Run**. Visit the repl URL:
+- API root: `/`
+- Minimal HTML:
+  - `/login` (basic form)
+  - `/upload` (employee)
+  - `/admin` (links to Users/Sets/Stats)
+4. Default logins (dev only):
+- Admin: `admin` / `dwang1237`
+- Employee: `slave` / `admin`
+
+## Notes
+- Use Neon for a free Postgres `DATABASE_URL`.
+- OCR = Tesseract by default; later you can add PaddleOCR.
+- Sets seeded: `s, c, a, o, d, k`.
+
+-------------------------
+FILE: alembic.ini
+-------------------------
+[alembic]
+script_location = alembic
+sqlalchemy.url = %(DATABASE_URL)s
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+
+-------------------------
+FILE: alembic/env.py
+-------------------------
+from __future__ import annotations
+from logging.config import fileConfig
+from sqlalchemy import engine_from_config, pool
+from alembic import context
+import os, sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from app.db.base import Base  # noqa
+from app.models.user import User  # noqa
+from app.models.bet_set import BetSet  # noqa
+from app.models.bookmaker import Bookmaker  # noqa
+from app.models.bet import Bet  # noqa
+
+config = context.config
+if config.get_main_option("sqlalchemy.url") is None:
+ config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", ""))
+
+fileConfig(config.config_file_name)
+
+target_metadata = Base.metadata
+
+def run_migrations_offline():
+ context.configure(
+     url=config.get_main_option("sqlalchemy.url"),
+     target_metadata=target_metadata,
+     literal_binds=True,
+     dialect_opts={"paramstyle": "named"},
+ )
+ with context.begin_transaction():
+     context.run_migrations()
+
+def run_migrations_online():
+ connectable = engine_from_config(
+     config.get_section(config.config_ini_section),
+     prefix="sqlalchemy.",
+     poolclass=pool.NullPool,
+ )
+ with connectable.connect() as connection:
+     context.configure(connection=connection, target_metadata=target_metadata)
+     with context.begin_transaction():
+         context.run_migrations()
+
+if context.is_offline_mode():
+ run_migrations_offline()
+else:
+ run_migrations_online()
+
+-------------------------
+FILE: alembic/script.py.mako
+-------------------------
+"""${message}
+
+Revision ID: ${up_revision}
+Revises: ${down_revision | comma,n}
+Create Date: ${create_date}
+"""
+from alembic import op
+import sqlalchemy as sa
+
+# revision identifiers, used by Alembic.
+revision = '${up_revision}'
+down_revision = ${repr(down_revision)}
+branch_labels = ${repr(branch_labels)}
+depends_on = ${repr(depends_on)}
+
+def upgrade():
+ ${upgrades if upgrades else "pass"}
+
+def downgrade():
+ ${downgrades if downgrades else "pass"}
+
+-------------------------
+FILE: alembic/versions/0001_init.py
+-------------------------
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
+
+revision = "0001_init"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+def upgrade():
+ op.create_table(
+     "users",
+     sa.Column("id", sa.Integer, primary_key=True),
+     sa.Column("username", sa.String(50), unique=True, nullable=False),
+     sa.Column("password_hash", sa.Text, nullable=False),
+     sa.Column("role", sa.String(20), nullable=False),
+     sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.text("TRUE")),
+     sa.Column("created_at", sa.TIMESTAMP, nullable=False, server_default=sa.text("NOW()")),
+ )
+ op.create_check_constraint("users_role_chk", "users", "role in ('admin','employee')")
+
+ op.create_table(
+     "bet_sets",
+     sa.Column("id", sa.Integer, primary_key=True),
+     sa.Column("name", sa.String(100), nullable=False, unique=True),
+     sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.text("TRUE")),
+ )
+
+ op.create_table(
+     "bookmakers",
+     sa.Column("id", sa.Integer, primary_key=True),
+     sa.Column("name", sa.String(100), nullable=False, unique=True),
+ )
+
+ op.create_table(
+     "bets",
+     sa.Column("id", sa.BigInteger, primary_key=True),
+     sa.Column("set_id", sa.Integer, sa.ForeignKey("bet_sets.id"), nullable=False),
+     sa.Column("bookmaker_id", sa.Integer, sa.ForeignKey("bookmakers.id"), nullable=False),
+     sa.Column("uploaded_by", sa.Integer, sa.ForeignKey("users.id"), nullable=False),
+     sa.Column("uploaded_at", sa.TIMESTAMP, nullable=False, server_default=sa.text("NOW()")),
+     sa.Column("image_path", sa.Text, nullable=False),
+     sa.Column("event_text", sa.Text),
+     sa.Column("bet_type", sa.String(50)),
+     sa.Column("odds_numeric", sa.Numeric(10,3)),
+     sa.Column("stake_manual", sa.Numeric(12,2), nullable=False),
+     sa.Column("potential_return", sa.Numeric(12,2)),
+     sa.Column("cashout_amount", sa.Numeric(12,2)),
+     sa.Column("commission_rate", sa.Numeric(5,4)),
+     sa.Column("result_status", sa.String(20)),
+     sa.Column("settled_at", sa.TIMESTAMP),
+     sa.Column("profit", sa.Numeric(12,2), nullable=False, server_default="0"),
+     sa.Column("raw_ocr_json", JSONB),
+     sa.Column("parse_version", sa.Integer, nullable=False, server_default="1"),
+     sa.Column("last_edited_by", sa.Integer, sa.ForeignKey("users.id")),
+     sa.Column("last_edited_at", sa.TIMESTAMP),
+ )
+
+ op.create_table(
+     "audit_log",
+     sa.Column("id", sa.BigInteger, primary_key=True),
+     sa.Column("bet_id", sa.BigInteger, sa.ForeignKey("bets.id", ondelete="SET NULL")),
+     sa.Column("actor_user_id", sa.Integer, sa.ForeignKey("users.id"), nullable=False),
+     sa.Column("action", sa.String(40), nullable=False),
+     sa.Column("before_json", JSONB),
+     sa.Column("after_json", JSONB),
+     sa.Column("created_at", sa.TIMESTAMP, nullable=False, server_default=sa.text("NOW()")),
+ )
+
+def downgrade():
+ op.drop_table("audit_log")
+ op.drop_table("bets")
+ op.drop_table("bookmakers")
+ op.drop_table("bet_sets")
+ op.drop_table("users")
+
+-------------------------
+FILE: app/config.py
+-------------------------
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+ DATABASE_URL: str
+ SECRET_KEY: str
+ ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200
+ OCR_ENGINE: str = "tesseract"
+ TESSERACT_CMD: str = "/usr/bin/tesseract"
+ UPLOAD_DIR: str = "uploads"
+ BETFAIR_DEFAULT_COMMISSION: float = 0.05
+
+ DEFAULT_ADMIN_USERNAME: str = "admin"
+ DEFAULT_ADMIN_PASSWORD: str = "dwang1237"
+ DEFAULT_EMPLOYEE_USERNAME: str = "slave"
+ DEFAULT_EMPLOYEE_PASSWORD: str = "admin"
+
+ model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+settings = Settings()
+
+-------------------------
+FILE: app/db/base.py
+-------------------------
+from sqlalchemy.orm import DeclarativeBase
+class Base(DeclarativeBase):
+ pass
+
+-------------------------
+FILE: app/db/session.py
+-------------------------
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from app.config import settings
+
+engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+def get_db():
+ db = SessionLocal()
+ try:
+     yield db
+ finally:
+     db.close()
+
+-------------------------
+FILE: app/db/init_data.py
+-------------------------
+from sqlalchemy.orm import Session
+from app.models.bet_set import BetSet
+from app.models.bookmaker import Bookmaker
+
+SET_NAMES = ["s","c","a","o","d","k"]
+BOOKMAKERS = ["Ladbrokes","PointsBet","Sportsbet","TAB","bet365","Betfair"]
+
+def init_core(db: Session):
+ for n in SET_NAMES:
+     if not db.query(BetSet).filter_by(name=n).first():
+         db.add(BetSet(name=n, is_active=True))
+ for n in BOOKMAKERS:
+     if not db.query(Bookmaker).filter_by(name=n).first():
+         db.add(Bookmaker(name=n))
+ db.commit()
+
+-------------------------
+FILE: app/models/user.py
+-------------------------
+from sqlalchemy import String, Boolean, Integer, TIMESTAMP, text
+from sqlalchemy.orm import Mapped, mapped_column
+from app.db.base import Base
+
+class User(Base):
+ __tablename__ = "users"
+ id: Mapped[int] = mapped_column(Integer, primary_key=True)
+ username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+ password_hash: Mapped[str] = mapped_column(nullable=False)
+ role: Mapped[str] = mapped_column(String(20), nullable=False)
+ is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("TRUE"))
+ created_at: Mapped[str] = mapped_column(TIMESTAMP, nullable=False, server_default=text("NOW()"))
+
+-------------------------
+FILE: app/models/bet_set.py
+-------------------------
+from sqlalchemy import String, Boolean, Integer
+from sqlalchemy.orm import Mapped, mapped_column
+from app.db.base import Base
+
+class BetSet(Base):
+ __tablename__ = "bet_sets"
+ id: Mapped[int] = mapped_column(Integer, primary_key=True)
+ name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+ is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+-------------------------
+FILE: app/models/bookmaker.py
+-------------------------
+from sqlalchemy import String, Integer
+from sqlalchemy.orm import Mapped, mapped_column
+from app.db.base import Base
+
+class Bookmaker(Base):
+ __tablename__ = "bookmakers"
+ id: Mapped[int] = mapped_column(Integer, primary_key=True)
+ name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+
+-------------------------
+FILE: app/models/bet.py
+-------------------------
+from sqlalchemy import (
+ Integer, String, Numeric, TIMESTAMP, ForeignKey, Text
+)
+from sqlalchemy.orm import Mapped, mapped_column
+from app.db.base import Base
+
+class Bet(Base):
+ __tablename__ = "bets"
+ id: Mapped[int] = mapped_column(primary_key=True)
+ set_id: Mapped[int] = mapped_column(ForeignKey("bet_sets.id"), nullable=False)
+ bookmaker_id: Mapped[int] = mapped_column(ForeignKey("bookmakers.id"), nullable=False)
+ uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+ uploaded_at: Mapped[str] = mapped_column(TIMESTAMP)
+ image_path: Mapped[str] = mapped_column(Text, nullable=False)
+
+ event_text: Mapped[str | None]
+ bet_type: Mapped[str | None]
+ odds_numeric: Mapped[float | None]
+ stake_manual: Mapped[float]
+ potential_return: Mapped[float | None]
+ cashout_amount: Mapped[float | None]
+ commission_rate: Mapped[float | None]
+ result_status: Mapped[str | None]
+ settled_at: Mapped[str | None]
+ profit: Mapped[float]
+
+ raw_ocr_json: Mapped[dict | None]
+ parse_version: Mapped[int]
+ last_edited_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+ last_edited_at: Mapped[str | None] = mapped_column(TIMESTAMP)
+
+-------------------------
+FILE: app/schemas/auth.py
+-------------------------
+from pydantic import BaseModel
+
+class LoginIn(BaseModel):
+ username: str
+ password: str
+
+class TokenOut(BaseModel):
+ access_token: str
+ token_type: str = "bearer"
+ role: str
+
+-------------------------
+FILE: app/schemas/users.py
+-------------------------
+from pydantic import BaseModel, constr
+from typing import Optional, Literal
+
+class UserOut(BaseModel):
+ id: int
+ username: str
+ role: Literal["admin","employee"]
+ is_active: bool
+ class Config: from_attributes = True
+
+class UserCreate(BaseModel):
+ username: constr(min_length=3, max_length=50)
+ password: constr(min_length=4)
+ role: Literal["admin","employee"]
+
+class UserUpdate(BaseModel):
+ username: Optional[constr(min_length=3, max_length=50)] = None
+ role: Optional[Literal["admin","employee"]] = None
+
+class UserStatusPatch(BaseModel):
+ is_active: bool
+
+class PasswordReset(BaseModel):
+ password: constr(min_length=6)
+
+-------------------------
+FILE: app/schemas/sets.py
+-------------------------
+from pydantic import BaseModel, constr
+
+class SetOut(BaseModel):
+ id: int
+ name: str
+ is_active: bool
+ class Config: from_attributes = True
+
+class SetCreate(BaseModel):
+ name: constr(min_length=1, max_length=100)
+
+class SetUpdate(BaseModel):
+ name: constr(min_length=1, max_length=100)
+
+class SetStatusPatch(BaseModel):
+ is_active: bool
+
+-------------------------
+FILE: app/schemas/bets.py
+-------------------------
+from pydantic import BaseModel
+from typing import Optional
+
+class BetUploadIn(BaseModel):
+ set_id: int
+ bookmaker_name: str
+ stake_manual: float
+
+class BetOut(BaseModel):
+ id: int
+ set_id: int
+ bookmaker_id: int
+ stake_manual: float
+ odds_numeric: Optional[float] = None
+ result_status: Optional[str] = None
+ profit: float
+ class Config: from_attributes = True
+
+-------------------------
+FILE: app/schemas/stats.py
+-------------------------
+from pydantic import BaseModel
+
+class SetStatsOut(BaseModel):
+ set_id: int
+ total_bets: int
+ wins: int
+ net_profit: float
+ avg_roi: float | None
+
+-------------------------
+FILE: app/crud/users.py
+-------------------------
+from sqlalchemy.orm import Session
+from app.models.user import User
+
+def get_by_username(db: Session, username: str) -> User | None:
+ return db.query(User).filter(User.username == username).first()
+
+def create(db: Session, username: str, password_hash: str, role: str) -> User:
+ u = User(username=username, password_hash=password_hash, role=role, is_active=True)
+ db.add(u); db.commit(); db.refresh(u); return u
+
+def list_users(db: Session, role: str | None=None, active: bool | None=None):
+ q = db.query(User)
+ if role: q = q.filter(User.role == role)
+ if active is not None: q = q.filter(User.is_active == active)
+ return q.order_by(User.id).all()
+
+-------------------------
+FILE: app/crud/sets.py
+-------------------------
+from sqlalchemy.orm import Session
+from app.models.bet_set import BetSet
+
+def create(db: Session, name: str) -> BetSet:
+ s = BetSet(name=name, is_active=True)
+ db.add(s); db.commit(); db.refresh(s); return s
+
+def list_sets(db: Session, active: bool | None=None):
+ q = db.query(BetSet)
+ if active is not None: q = q.filter(BetSet.is_active == active)
+ return q.order_by(BetSet.name).all()
+
+def rename(db: Session, set_id: int, name: str) -> BetSet | None:
+ s = db.get(BetSet, set_id)
+ if not s: return None
+ s.name = name; db.add(s); db.commit(); db.refresh(s); return s
+
+def set_status(db: Session, set_id: int, is_active: bool) -> BetSet | None:
+ s = db.get(BetSet, set_id)
+ if not s: return None
+ s.is_active = is_active; db.add(s); db.commit(); db.refresh(s); return s
+
+-------------------------
+FILE: app/crud/bets.py
+-------------------------
+from sqlalchemy.orm import Session
+from sqlalchemy import func, case
+from app.models.bet import Bet
+from app.models.bookmaker import Bookmaker
+
+def get_or_create_bookmaker(db: Session, name: str) -> int:
+ name = name.strip()
+ bk = db.query(Bookmaker).filter_by(name=name).first()
+ if not bk:
+     bk = Bookmaker(name=name); db.add(bk); db.commit(); db.refresh(bk)
+ return bk.id
+
+def create_bet(db: Session, **kwargs) -> Bet:
+ b = Bet(**kwargs)
+ db.add(b); db.commit(); db.refresh(b); return b
+
+def recent_bets(db: Session, hours: int = 72, set_id: int | None=None):
+ q = db.query(Bet).filter(Bet.uploaded_at >= func.now() - func.make_interval(hours=hours))
+ if set_id: q = q.filter(Bet.set_id == set_id)
+ return q.order_by(Bet.uploaded_at.desc()).all()
+
+def set_stats(db: Session, hours: int = 72):
+ b = Bet
+ q = db.query(
+     b.set_id.label("set_id"),
+     func.count().label("total_bets"),
+     func.sum(case((b.result_status=='won', 1), else_=0)).label("wins"),
+     func.coalesce(func.sum(b.profit), 0).label("net_profit"),
+     func.avg(case((b.stake_manual>0, b.profit/b.stake_manual), else_=None)).label("avg_roi")
+ ).filter(b.uploaded_at >= func.now() - func.make_interval(hours=hours)).group_by(b.set_id)
+ return q.all()
+
+-------------------------
+FILE: app/crud/stats.py
+-------------------------
+# placeholder (logic is in crud/bets.set_stats)
+pass
+
+-------------------------
+FILE: app/auth/hashing.py
+-------------------------
+from passlib.context import CryptContext
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def get_password_hash(password: str) -> str:
+ return pwd_context.hash(password)
+
+def verify_password(plain: str, hashed: str) -> bool:
+ return pwd_context.verify(plain, hashed)
+
+-------------------------
+FILE: app/auth/jwt_tools.py
+-------------------------
+from datetime import datetime, timedelta
+import jwt
+from app.config import settings
+
+def create_access_token(sub: str, role: str, expires_minutes: int | None=None) -> str:
+ to_encode = {"sub": sub, "role": role, "iat": int(datetime.utcnow().timestamp())}
+ expire = datetime.utcnow() + timedelta(minutes=expires_minutes or settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+ to_encode.update({"exp": expire})
+ return jwt.encode(to_encode, settings.SECRET_KEY, algorithm="HS256")
+
+def decode_token(token: str):
+ return jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+
+-------------------------
+FILE: app/auth/router.py
+-------------------------
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.schemas.auth import LoginIn, TokenOut
+from app.auth.hashing import verify_password
+from app.auth.jwt_tools import create_access_token
+from app.db.session import get_db
+from app.crud.users import get_by_username
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+@router.post("/login", response_model=TokenOut)
+def login(payload: LoginIn, db: Session = Depends(get_db)):
+ user = get_by_username(db, payload.username)
+ if not user or not user.is_active or not verify_password(payload.password, user.password_hash):
+     raise HTTPException(401, "Invalid credentials or user disabled")
+ token = create_access_token(sub=str(user.id), role=user.role)
+ return TokenOut(access_token=token, role=user.role)
+
+-------------------------
+FILE: app/deps.py
+-------------------------
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from app.auth.jwt_tools import decode_token
+from app.db.session import get_db
+from sqlalchemy.orm import Session
+from app.models.user import User
+
+bearer = HTTPBearer(auto_error=True)
+
+def current_user(creds: HTTPAuthorizationCredentials = Depends(bearer), db: Session = Depends(get_db)) -> User:
+ try:
+     payload = decode_token(creds.credentials)
+     uid = int(payload["sub"]); role = payload.get("role")
+ except Exception:
+     raise HTTPException(401, "Invalid token")
+ user = db.get(User, uid)
+ if not user or not user.is_active:
+     raise HTTPException(401, "User disabled")
+ user._role = role
+ return user
+
+def require_admin(user: User = Depends(current_user)) -> User:
+ if getattr(user, "_role", None) != "admin":
+     raise HTTPException(403, "Admin only")
+ return user
+
+-------------------------
+FILE: app/services/profit.py
+-------------------------
+def compute_profit(bookmaker: str, side: str | None, odds: float | None, stake: float,
+                result_status: str | None, cashout_amount: float | None, commission: float | None) -> float:
+ commission = commission or 0.0
+ if result_status and result_status.lower().startswith("cashout") and cashout_amount is not None:
+     return round(float(cashout_amount) - float(stake), 2)
+ if bookmaker.lower() == "betfair" and (side or "").lower() == "lay":
+     if result_status == "won":
+         return round(float(stake) * (1 - commission), 2)
+     if result_status == "lost" and odds:
+         return round(- float(stake) * (float(odds) - 1), 2)
+     return 0.0
+ # back logic
+ if result_status == "won" and odds:
+     return round(float(stake) * (float(odds) - 1) * (1 - commission), 2)
+ if result_status == "lost":
+     return round(-float(stake), 2)
+ return 0.0
+
+-------------------------
+FILE: app/services/ocr/preprocess.py
+-------------------------
+import cv2
+import numpy as np
+
+def preprocess(img_bgr):
+ gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+ gray = cv2.bilateralFilter(gray, 9, 75, 75)
+ th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                            cv2.THRESH_BINARY, 35, 10)
+ h, w = th.shape
+ scale = 1600.0 / max(w, 1)
+ if scale > 0: th = cv2.resize(th, (int(w*scale), int(h*scale)))
+ return th
+
+-------------------------
+FILE: app/services/ocr/engine.py
+-------------------------
+import pytesseract, json, cv2
+from app.config import settings
+from .preprocess import preprocess
+
+def ocr_image(path: str):
+ img = cv2.imread(path)
+ proc = preprocess(img)
+ data = pytesseract.image_to_data(proc, output_type=pytesseract.Output.DICT)
+ lines = []
+ for i, txt in enumerate(data["text"]):
+     if txt and txt.strip():
+         lines.append(txt.strip())
+ return "\n".join(lines), data
+
+-------------------------
+FILE: app/services/ocr/parsers/common_regex.py
+-------------------------
+import re
+
+STAKE_RE = r"(stake|wager)\s*[:\-]?\s*\$?\s*([0-9]+(?:\.[0-9]{1,2})?)"
+ODDS_RE  = r"(odds|price)\s*[:\-]?\s*([0-9]+(?:\.[0-9]{1,3})?)"
+RET_RE   = r"(potential\s*return|payout|return)\s*[:\-]?\s*\$?\s*([0-9]+(?:\.[0-9]{1,2})?)"
+RESULT_RE = r"(result|status)\s*[:\-]?\s*(won|lost|void|cash.?out|pending)"
+CASHOUT_RE = r"(cash.?out)\s*[:\-]?\s*\$?\s*([0-9]+(?:\.[0-9]{1,2})?)"
+COMM_RE = r"(commission)\s*[:\-]?\s*([0-9]+(?:\.[0-9]+)?)\s*%?"
+SIDE_RE = r"\b(back|lay)\b"
+
+def grab(rx, text_lower):
+ m = re.search(rx, text_lower, re.I)
+ return m.group(2) if m else None
+
+def parse_common(text: str):
+ t = text.lower()
+ return {
+     "stake_ocr": grab(STAKE_RE, t),
+     "odds": grab(ODDS_RE, t),
+     "potential_return": grab(RET_RE, t),
+     "result_status": grab(RESULT_RE, t),
+     "cashout_amount": grab(CASHOUT_RE, t),
+     "commission": grab(COMM_RE, t),
+     "side": grab(SIDE_RE, t),
+ }
+
+-------------------------
+FILE: app/services/ocr/parsers/ladbrokes.py
+-------------------------
+from .common_regex import parse_common
+def parse(text: str): return parse_common(text)
+
+-------------------------
+FILE: app/services/ocr/parsers/pointsbet.py
+-------------------------
+from .common_regex import parse_common
+def parse(text: str): return parse_common(text)
+
+-------------------------
+FILE: app/services/ocr/parsers/sportsbet.py
+-------------------------
+from .common_regex import parse_common
+def parse(text: str): return parse_common(text)
+
+-------------------------
+FILE: app/services/ocr/parsers/tab.py
+-------------------------
+from .common_regex import parse_common
+def parse(text: str): return parse_common(text)
+
+-------------------------
+FILE: app/services/ocr/parsers/bet365.py
+-------------------------
+from .common_regex import parse_common
+def parse(text: str): return parse_common(text)
+
+-------------------------
+FILE: app/services/ocr/parsers/betfair.py
+-------------------------
+from .common_regex import parse_common
+def parse(text: str): return parse_common(text)
+
+-------------------------
+FILE: app/routers/files.py
+-------------------------
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+import os
+from app.deps import current_user
+from app.config import settings
+
+router = APIRouter(prefix="/files", tags=["files"])
+
+@router.get("/{filename}")
+def get_file(filename: str, user = Depends(current_user)):
+ path = os.path.join(settings.UPLOAD_DIR, filename)
+ if not os.path.exists(path):
+     raise HTTPException(404, "Not found")
+ return FileResponse(path)
+
+-------------------------
+FILE: app/routers/bets.py
+-------------------------
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from sqlalchemy.orm import Session
+from datetime import datetime
+import os, json
+from app.deps import current_user, require_admin
+from app.db.session import get_db
+from app.config import settings
+from app.crud.bets import create_bet, get_or_create_bookmaker, recent_bets
+from app.services.ocr.engine import ocr_image
+from app.services.ocr.parsers import ladbrokes, pointsbet, sportsbet, tab, bet365, betfair
+from app.services.profit import compute_profit
+from app.schemas.bets import BetOut
+
+router = APIRouter(prefix="/bets", tags=["bets"])
+
+PARSERS = {
+ "ladbrokes": ladbrokes,
+ "pointsbet": pointsbet,
+ "sportsbet": sportsbet,
+ "tab": tab,
+ "bet365": bet365,
+ "betfair": betfair
+}
+
+@router.post("/upload", response_model=BetOut)
+async def upload_bet(
+ set_id: int = Form(...),
+ bookmaker_name: str = Form(...),
+ stake_manual: float = Form(...),
+ image: UploadFile = File(...),
+ user = Depends(current_user),
+ db: Session = Depends(get_db)
+):
+ os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+ fname = f"{int(datetime.utcnow().timestamp())}_{image.filename}"
+ fpath = os.path.join(settings.UPLOAD_DIR, fname)
+ with open(fpath, "wb") as f: f.write(await image.read())
+
+ text, raw = ocr_image(fpath)
+ parser = PARSERS.get(bookmaker_name.strip().lower())
+ parsed = parser.parse(text) if parser else {}
+
+ odds = float(parsed.get("odds")) if parsed.get("odds") else None
+ result_status = parsed.get("result_status")
+ cashout = float(parsed.get("cashout_amount")) if parsed.get("cashout_amount") else None
+ comm = float(parsed.get("commission"))/100.0 if parsed.get("commission") else (settings.BETFAIR_DEFAULT_COMMISSION if bookmaker_name.lower()=="betfair" else 0.0)
+ side = parsed.get("side")
+
+ profit = compute_profit(bookmaker_name, side, odds, stake_manual, result_status, cashout, comm)
+
+ bookmaker_id = get_or_create_bookmaker(db, bookmaker_name)
+ bet = create_bet(
+     db,
+     set_id=set_id,
+     bookmaker_id=bookmaker_id,
+     uploaded_by=user.id,
+     uploaded_at=datetime.utcnow(),
+     image_path=fname,
+     event_text=text[:5000],
+     bet_type=side or "back",
+     odds_numeric=odds,
+     stake_manual=stake_manual,
+     potential_return=None,
+     cashout_amount=cashout,
+     commission_rate=comm,
+     result_status=result_status,
+     settled_at=None,
+     profit=profit,
+     raw_ocr_json=raw,
+     parse_version=1,
+     last_edited_by=None,
+     last_edited_at=None
+ )
+ return bet
+
+@router.get("/recent", response_model=list[BetOut])
+def recent(hours: int = 72, set_id: int | None = None, db: Session = Depends(get_db), user = Depends(current_user)):
+ bets = recent_bets(db, hours=hours, set_id=set_id)
+ return bets
+
+-------------------------
+FILE: app/routers/stats.py
+-------------------------
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from app.db.session import get_db
+from app.deps import require_admin
+from app.crud.bets import set_stats
+from app.schemas.stats import SetStatsOut
+
+router = APIRouter(prefix="/stats", tags=["stats"])
+
+@router.get("/sets", response_model=list[SetStatsOut])
+def sets_stats(hours: int = 72, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ return [SetStatsOut(**dict(r._mapping)) for r in set_stats(db, hours=hours)]
+
+-------------------------
+FILE: app/routers/admin.py
+-------------------------
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from app.deps import require_admin
+from app.db.session import get_db
+from app.schemas.users import UserCreate, UserUpdate, UserStatusPatch, PasswordReset, UserOut
+from app.schemas.sets import SetCreate, SetUpdate, SetStatusPatch, SetOut
+from app.auth.hashing import get_password_hash
+from app.models.user import User
+from app.models.bet_set import BetSet
+from app.crud.users import list_users
+from app.crud.sets import list_sets, create as create_set, rename as rename_set, set_status as set_set_status
+
+router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Users
+@router.post("/users", response_model=UserOut)
+def create_user(body: UserCreate, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ if db.query(User).filter_by(username=body.username).first():
+     raise HTTPException(400, "Username exists")
+ u = User(username=body.username, password_hash=get_password_hash(body.password), role=body.role, is_active=True)
+ db.add(u); db.commit(); db.refresh(u); return u
+
+@router.get("/users", response_model=list[UserOut])
+def get_users(role: str | None=None, active: bool | None=None, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ return list_users(db, role=role, active=active)
+
+@router.put("/users/{user_id}", response_model=UserOut)
+def update_user(user_id: int, body: UserUpdate, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ u = db.get(User, user_id)
+ if not u: raise HTTPException(404, "Not found")
+ if body.username:
+     if db.query(User).filter(User.username==body.username, User.id!=user_id).first():
+         raise HTTPException(400, "Username taken")
+     u.username = body.username
+ if body.role: u.role = body.role
+ db.add(u); db.commit(); db.refresh(u); return u
+
+@router.patch("/users/{user_id}/status", response_model=UserOut)
+def patch_user_status(user_id: int, body: UserStatusPatch, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ u = db.get(User, user_id)
+ if not u: raise HTTPException(404, "Not found")
+ u.is_active = body.is_active
+ db.add(u); db.commit(); db.refresh(u); return u
+
+@router.post("/users/{user_id}/password")
+def reset_password(user_id: int, body: PasswordReset, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ u = db.get(User, user_id)
+ if not u: raise HTTPException(404, "Not found")
+ u.password_hash = get_password_hash(body.password)
+ db.add(u); db.commit(); return {"ok": True}
+
+# Sets
+@router.post("/sets", response_model=SetOut)
+def create_set_route(body: SetCreate, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ if db.query(BetSet).filter_by(name=body.name).first():
+     raise HTTPException(400, "Set name exists")
+ return create_set(db, body.name)
+
+@router.get("/sets", response_model=list[SetOut])
+def list_sets_route(active: bool | None=None, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ return list_sets(db, active=active)
+
+@router.put("/sets/{set_id}", response_model=SetOut)
+def rename_set_route(set_id: int, body: SetUpdate, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ s = rename_set(db, set_id, body.name)
+ if not s: raise HTTPException(404, "Not found")
+ return s
+
+@router.patch("/sets/{set_id}/status", response_model=SetOut)
+def patch_set_status_route(set_id: int, body: SetStatusPatch, db: Session = Depends(get_db), admin = Depends(require_admin)):
+ s = set_set_status(db, set_id, body.is_active)
+ if not s: raise HTTPException(404, "Not found")
+ return s
+
+-------------------------
+FILE: app/main.py
+-------------------------
+from fastapi import FastAPI, Request, Depends, UploadFile, File, Form
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+import os
+from app.config import settings
+from app.db.session import get_db, SessionLocal, engine
+from sqlalchemy.orm import Session
+from app.db.init_data import init_core
+from app.models import user, bet_set, bookmaker, bet  # ensure models import
+from app.auth.router import router as auth_router
+from app.routers.bets import router as bets_router
+from app.routers.stats import router as stats_router
+from app.routers.files import router as files_router
+from app.routers.admin import router as admin_router
+
+app = FastAPI(title="bet-ocr-app")
+
+os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+app.include_router(auth_router)
+app.include_router(bets_router)
+app.include_router(stats_router)
+app.include_router(files_router)
+app.include_router(admin_router)
+
+@app.on_event("startup")
+def startup_seed():
+ # Seed sets & bookmakers
+ with SessionLocal() as db:
+     init_core(db)
+
+@app.get("/", response_class=HTMLResponse)
+def root():
+ return "<h2>bet-ocr-app</h2><p>See <a href='/login'>/login</a>, <a href='/upload'>/upload</a>, <a href='/admin'>/admin</a></p>"
+
+# Minimal HTML helpers (quick dev UI)
+LOGIN_HTML = """
+<h3>Login</h3>
+<form method="post" action="/auth/login" onsubmit="doLogin(event)">
+<label>Username</label><input id="u" /><br/>
+<label>Password</label><input id="p" type="password" /><br/>
+<button type="submit">Login</button>
+</form>
+<pre id="out"></pre>
+<script>
+async function doLogin(e){
+e.preventDefault();
+const r = await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:document.getElementById('u').value,password:document.getElementById('p').value})});
+const j = await r.json(); localStorage.setItem('token', j.access_token); localStorage.setItem('role', j.role); document.getElementById('out').textContent = JSON.stringify(j,null,2);
+}
+</script>
+"""
+
+UPLOAD_HTML = """
+<h3>Upload Bet</h3>
+<form onsubmit="uploadBet(event)">
+<label>Set ID</label><input id="set_id" type="number" required/><br/>
+<label>Bookmaker</label><input id="bk" value="Sportsbet"/><br/>
+<label>Stake (manual)</label><input id="stake" type="number" step="0.01" required/><br/>
+<label>Image</label><input id="img" type="file" accept="image/*" required/><br/>
+<button>Upload</button>
+</form>
+<pre id="out"></pre>
+<script>
+async function uploadBet(e){
+e.preventDefault();
+const fd = new FormData();
+fd.append('set_id', document.getElementById('set_id').value);
+fd.append('bookmaker_name', document.getElementById('bk').value);
+fd.append('stake_manual', document.getElementById('stake').value);
+fd.append('image', document.getElementById('img').files[0]);
+const r = await fetch('/bets/upload',{method:'POST', headers:{'Authorization':'Bearer '+localStorage.getItem('token')}, body: fd});
+const j = await r.json(); document.getElementById('out').textContent = JSON.stringify(j,null,2);
+}
+</script>
+"""
+
+ADMIN_HTML = """
+<h3>Admin</h3>
+<p>Token in LS. Simple helpers:</p>
+<button onclick="listUsers()">List Users</button>
+<button onclick="listSets()">List Sets</button>
+<button onclick="stats()">Stats (72h)</button>
+<pre id="out"></pre>
+<script>
+async function listUsers(){
+const r = await fetch('/admin/users',{headers:{'Authorization':'Bearer '+localStorage.getItem('token')}});
+document.getElementById('out').textContent = JSON.stringify(await r.json(),null,2);
+}
+async function listSets(){
+const r = await fetch('/admin/sets',{headers:{'Authorization':'Bearer '+localStorage.getItem('token')}});
+document.getElementById('out').textContent = JSON.stringify(await r.json(),null,2);
+}
+async function stats(){
+const r = await fetch('/stats/sets?hours=72',{headers:{'Authorization':'Bearer '+localStorage.getItem('token')}});
+document.getElementById('out').textContent = JSON.stringify(await r.json(),null,2);
+}
+</script>
+"""
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(): return LOGIN_HTML
+
+@app.get("/upload", response_class=HTMLResponse)
+def upload_page(): return UPLOAD_HTML
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(): return ADMIN_HTML
+
+-------------------------
+FILE: scripts/create_admin.py
+-------------------------
+from app.config import settings
+from app.db.session import SessionLocal
+from app.auth.hashing import get_password_hash
+from app.models.user import User
+
+if __name__ == "__main__":
+ with SessionLocal() as db:
+     if not db.query(User).filter_by(username=settings.DEFAULT_ADMIN_USERNAME).first():
+         db.add(User(username=settings.DEFAULT_ADMIN_USERNAME,
+                     password_hash=get_password_hash(settings.DEFAULT_ADMIN_PASSWORD),
+                     role="admin", is_active=True))
+     db.commit()
+     print("Admin ensured.")
+
+-------------------------
+FILE: scripts/create_defaults.py
+-------------------------
+from app.config import settings
+from app.db.session import SessionLocal
+from app.auth.hashing import get_password_hash
+from app.models.user import User
+from app.db.init_data import init_core
+
+if __name__ == "__main__":
+ with SessionLocal() as db:
+     init_core(db)
+     if not db.query(User).filter_by(username=settings.DEFAULT_ADMIN_USERNAME).first():
+         db.add(User(username=settings.DEFAULT_ADMIN_USERNAME,
+                     password_hash=get_password_hash(settings.DEFAULT_ADMIN_PASSWORD),
+                     role="admin", is_active=True))
+     if not db.query(User).filter_by(username=settings.DEFAULT_EMPLOYEE_USERNAME).first():
+         db.add(User(username=settings.DEFAULT_EMPLOYEE_USERNAME),
+         )
+         emp = db.query(User).filter_by(username=settings.DEFAULT_EMPLOYEE_USERNAME).first()
+         if not emp:
+             db.add(User(username=settings.DEFAULT_EMPLOYEE_USERNAME,
+                         password_hash=get_password_hash(settings.DEFAULT_EMPLOYEE_PASSWORD),
+                         role="employee", is_active=True))
+     else:
+         # Ensure employee has correct role/hash in case it existed without these
+         emp = db.query(User).filter_by(username=settings.DEFAULT_EMPLOYEE_USERNAME).first()
+         emp.role = "employee"
+         emp.password_hash = get_password_hash(settings.DEFAULT_EMPLOYEE_PASSWORD)
+         emp.is_active = True
+         db.add(emp)
+     db.commit()
+     print("Seeded default admin and employee (dev only).")

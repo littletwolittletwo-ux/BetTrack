@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+input, select, button, textarea { @apply bg-[#0f1318] border border-line rounded-xl text-text px-3 py-2; }
+button.btn { @apply bg-acc text-[#06111f] font-semibold hover:brightness-110 transition; }
+.card { @apply bg-card border border-line rounded-2xl p-5 shadow-soft; }
+.h1 { @apply text-2xl font-bold; }
+.h2 { @apply text-lg font-semibold text-mut; }
+.badge { @apply px-2 py-1 rounded-full text-sm bg-[#16202a] text-mut; }

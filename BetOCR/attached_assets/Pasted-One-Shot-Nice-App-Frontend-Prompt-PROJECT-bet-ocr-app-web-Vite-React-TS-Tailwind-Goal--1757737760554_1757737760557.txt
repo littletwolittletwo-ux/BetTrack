@@ -1,0 +1,829 @@
+One-Shot “Nice App” Frontend Prompt
+PROJECT: bet-ocr-app / web (Vite + React + TS + Tailwind)
+
+Goal:
+- Replace existing /web with a modern, dark-themed SPA.
+- App shell: left sidebar + top bar, responsive.
+- Screens: Dashboard (stats), Upload (drag/drop), Users (CRUD), Sets (CRUD).
+- JWT auth; role-gated routes (admin/employee).
+- Build copies to ../app/static/admin so FastAPI serves it at /admin.
+
+Create/overwrite the following:
+
+web/
+├─ package.json
+├─ tsconfig.json
+├─ vite.config.ts
+├─ postcss.config.js
+├─ tailwind.config.js
+├─ index.html
+├─ src/
+│  ├─ main.tsx
+│  ├─ App.tsx
+│  ├─ styles.css
+│  ├─ api.ts
+│  ├─ auth.ts
+│  ├─ hooks/useToast.tsx
+│  ├─ components/
+│  │  ├─ AppShell.tsx
+│  │  ├─ Sidebar.tsx
+│  │  ├─ Topbar.tsx
+│  │  ├─ Card.tsx
+│  │  ├─ Table.tsx
+│  │  ├─ Form.tsx
+│  │  ├─ Dropzone.tsx
+│  │  └─ Toast.tsx
+│  └─ routes/
+│     ├─ Login.tsx
+│     ├─ Dashboard.tsx
+│     ├─ Upload.tsx
+│     ├─ Users.tsx
+│     └─ Sets.tsx
+
+-------------------------
+FILE: web/package.json
+-------------------------
+{
+  "name": "bet-ocr-frontend",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "postbuild": "rm -rf ../app/static/admin && mkdir -p ../app/static && cp -r dist ../app/static/admin",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "framer-motion": "11.3.31",
+    "lucide-react": "0.452.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.26.1",
+    "recharts": "2.12.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.5.2",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.4.47",
+    "tailwindcss": "3.4.10",
+    "typescript": "5.5.4",
+    "vite": "5.4.3",
+    "@vitejs/plugin-react": "4.3.1"
+  }
+}
+
+-------------------------
+FILE: web/tsconfig.json
+-------------------------
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src"]
+}
+
+-------------------------
+FILE: web/vite.config.ts
+-------------------------
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      "/auth": "http://localhost:8000",
+      "/bets": "http://localhost:8000",
+      "/stats": "http://localhost:8000",
+      "/admin": "http://localhost:8000",
+      "/files": "http://localhost:8000"
+    }
+  },
+  build: { outDir: "dist", emptyOutDir: true }
+});
+
+-------------------------
+FILE: web/postcss.config.js
+-------------------------
+export default { plugins: { tailwindcss: {}, autoprefixer: {} } };
+
+-------------------------
+FILE: web/tailwind.config.js
+-------------------------
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        bg: "#0b0d12",
+        card: "#10141b",
+        line: "#1c2430",
+        text: "#e6eef7",
+        mut: "#98a8ba",
+        acc: "#5aa9ff",
+        danger: "#ff6b6b",
+        ok: "#33d69f"
+      },
+      borderRadius: { xl: "14px", "2xl": "20px" },
+      boxShadow: { soft: "0 10px 30px rgba(0,0,0,0.25)" }
+    }
+  },
+  plugins: []
+};
+
+-------------------------
+FILE: web/index.html
+-------------------------
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>bet-ocr-app</title>
+  </head>
+  <body class="h-full bg-bg text-text">
+    <div id="root" class="h-full"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+-------------------------
+FILE: web/src/styles.css
+-------------------------
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+input, select, button, textarea { @apply bg-[#0f1318] border border-line rounded-xl text-text px-3 py-2; }
+button.btn { @apply bg-acc text-[#06111f] font-semibold hover:brightness-110 transition; }
+.card { @apply bg-card border border-line rounded-2xl p-5 shadow-soft; }
+.h1 { @apply text-2xl font-bold; }
+.h2 { @apply text-lg font-semibold text-mut; }
+.badge { @apply px-2 py-1 rounded-full text-sm bg-[#16202a] text-mut; }
+
+-------------------------
+FILE: web/src/api.ts
+-------------------------
+export type Token = { access_token: string; role: "admin"|"employee" };
+const BASE = ""; // proxied in dev, served by FastAPI in prod
+
+function authHeader() {
+  const t = localStorage.getItem("token");
+  return t ? { Authorization: "Bearer " + t } : {};
+}
+async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(url, init);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function login(username: string, password: string): Promise<Token> {
+  return jsonFetch<Token>(`${BASE}/auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password })
+  });
+}
+
+export async function setStats(hours=72) {
+  return jsonFetch<any[]>(`/stats/sets?hours=${hours}`, { headers: { ...authHeader() } });
+}
+
+export async function uploadBet(fd: FormData) {
+  return jsonFetch(`/bets/upload`, { method: "POST", headers: { ...authHeader() }, body: fd });
+}
+
+export async function fetchSets(active?: boolean) {
+  const url = new URL(`/admin/sets`, location.origin);
+  if (active !== undefined) url.searchParams.set("active", String(active));
+  return jsonFetch(url.toString().replace(location.origin, ""), { headers: { ...authHeader() } });
+}
+
+export async function createSet(name: string) {
+  return jsonFetch(`/admin/sets`, { method: "POST", headers: { "Content-Type":"application/json", ...authHeader() }, body: JSON.stringify({ name }) });
+}
+export async function renameSet(id:number, name:string) {
+  return jsonFetch(`/admin/sets/${id}`, { method: "PUT", headers: { "Content-Type":"application/json", ...authHeader() }, body: JSON.stringify({ name }) });
+}
+export async function toggleSet(id:number, is_active:boolean) {
+  return jsonFetch(`/admin/sets/${id}/status`, { method: "PATCH", headers: { "Content-Type":"application/json", ...authHeader() }, body: JSON.stringify({ is_active }) });
+}
+
+export async function listUsers(params?: { role?: string; active?: boolean }) {
+  const url = new URL(`/admin/users`, location.origin);
+  if (params?.role) url.searchParams.set("role", params.role);
+  if (params?.active !== undefined) url.searchParams.set("active", String(params.active));
+  return jsonFetch(url.toString().replace(location.origin, ""), { headers: { ...authHeader() } });
+}
+export async function createUser(username:string, password:string, role:"admin"|"employee") {
+  return jsonFetch(`/admin/users`, { method:"POST", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify({ username, password, role }) });
+}
+export async function updateUser(id:number, payload: { username?:string; role?: "admin"|"employee" }) {
+  return jsonFetch(`/admin/users/${id}`, { method:"PUT", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify(payload) });
+}
+export async function patchUserStatus(id:number, is_active:boolean) {
+  return jsonFetch(`/admin/users/${id}/status`, { method:"PATCH", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify({ is_active }) });
+}
+export async function resetPassword(id:number, password:string) {
+  return jsonFetch(`/admin/users/${id}/password`, { method:"POST", headers:{ "Content-Type":"application/json", ...authHeader()}, body: JSON.stringify({ password }) });
+}
+
+-------------------------
+FILE: web/src/auth.ts
+-------------------------
+export function saveAuth(token: string, role: "admin"|"employee") {
+  localStorage.setItem("token", token);
+  localStorage.setItem("role", role);
+}
+export function logout() {
+  localStorage.removeItem("token");
+  localStorage.removeItem("role");
+  location.href = "/admin/";
+}
+export function getRole(): "admin"|"employee"|null {
+  return (localStorage.getItem("role") as any) || null;
+}
+export function hasAuth() { return !!localStorage.getItem("token"); }
+
+-------------------------
+FILE: web/src/hooks/useToast.tsx
+-------------------------
+import { createContext, useContext, useState } from "react";
+
+type Toast = { id:number; msg:string; type?: "ok"|"err" };
+const Ctx = createContext<{ toasts:Toast[]; push:(t:Omit<Toast,"id">)=>void; remove:(id:number)=>void } | null>(null);
+
+export function ToastProvider({ children }: { children: React.ReactNode }) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const push = (t:Omit<Toast,"id">) => {
+    const id = Date.now()+Math.random();
+    setToasts(x=>[...x,{...t,id}]);
+    setTimeout(()=>remove(id), 3500);
+  };
+  const remove = (id:number) => setToasts(x=>x.filter(t=>t.id!==id));
+  return <Ctx.Provider value={{toasts,push,remove}}>{children}<ToastList toasts={toasts} remove={remove}/></Ctx.Provider>;
+}
+export function useToast(){ const v = useContext(Ctx); if(!v) throw new Error("Toast ctx"); return v; }
+
+function ToastList({ toasts, remove }:{ toasts:Toast[]; remove:(id:number)=>void }) {
+  return <div className="fixed top-4 right-4 space-y-2 z-50">
+    {toasts.map(t=>
+      <div key={t.id} className={`px-4 py-2 rounded-xl border ${t.type==="err"?"border-danger bg-[#2a1212]":"border-ok bg-[#0d2a21]"}`}>
+        <div className="flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full ${t.type==="err"?"bg-danger":"bg-ok"}`}></div>
+          <div>{t.msg}</div>
+          <button className="ml-2 text-mut" onClick={()=>remove(t.id)}>×</button>
+        </div>
+      </div>
+    )}
+  </div>;
+}
+
+-------------------------
+FILE: web/src/components/AppShell.tsx
+-------------------------
+import Sidebar from "./Sidebar";
+import Topbar from "./Topbar";
+import { motion } from "framer-motion";
+
+export default function AppShell({ children }:{ children: React.ReactNode }){
+  return (
+    <div className="min-h-screen grid" style={{gridTemplateColumns:"280px 1fr"}}>
+      <Sidebar />
+      <div className="min-h-screen flex flex-col">
+        <Topbar />
+        <motion.main
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25 }}
+          className="p-6 space-y-6"
+        >
+          {children}
+        </motion.main>
+      </div>
+    </div>
+  );
+}
+
+-------------------------
+FILE: web/src/components/Sidebar.tsx
+-------------------------
+import { Link, useLocation } from "react-router-dom";
+import { getRole, hasAuth } from "@/auth";
+import { Shield, Upload, Users, Settings2, LayoutDashboard } from "lucide-react";
+
+export default function Sidebar(){
+  const loc = useLocation();
+  const role = getRole();
+  const active = (p:string) => loc.pathname.includes(p) ? "bg-[#0f1721] border border-line" : "";
+  return (
+    <aside className="h-screen bg-card border-r border-line p-4 flex flex-col gap-3">
+      <div className="flex items-center gap-2 mb-2">
+        <Shield className="text-acc" />
+        <div className="font-bold">bet-ocr-app</div>
+      </div>
+      {hasAuth() ? (
+        <>
+          <Link className={`card py-3 flex items-center gap-3 ${active("dashboard")}`} to="/admin/dashboard"><LayoutDashboard size={18}/> Dashboard</Link>
+          <Link className={`card py-3 flex items-center gap-3 ${active("upload")}`} to="/admin/upload"><Upload size={18}/> Upload</Link>
+          {role==="admin" && <>
+            <Link className={`card py-3 flex items-center gap-3 ${active("users")}`} to="/admin/users"><Users size={18}/> Users</Link>
+            <Link className={`card py-3 flex items-center gap-3 ${active("sets")}`} to="/admin/sets"><Settings2 size={18}/> Sets</Link>
+          </>}
+        </>
+      ) : (
+        <Link className={`card py-3 flex items-center gap-3 ${active("login")}`} to="/admin/login"><Shield size={18}/> Login</Link>
+      )}
+      <div className="mt-auto text-xs text-mut">v0.2.0</div>
+    </aside>
+  );
+}
+
+-------------------------
+FILE: web/src/components/Topbar.tsx
+-------------------------
+import { logout, getRole, hasAuth } from "@/auth";
+
+export default function Topbar(){
+  const role = getRole();
+  return (
+    <header className="sticky top-0 z-10 bg-bg/70 backdrop-blur border-b border-line px-6 py-3 flex items-center justify-between">
+      <div className="text-sm text-mut">Welcome {hasAuth() ? `(${role})` : ""}</div>
+      <div className="flex items-center gap-2">
+        {hasAuth() ? <button className="btn" onClick={logout}>Logout</button> : null}
+      </div>
+    </header>
+  );
+}
+
+-------------------------
+FILE: web/src/components/Card.tsx
+-------------------------
+export function Card({children, className=""}:{children:React.ReactNode; className?:string}){
+  return <div className={`card ${className}`}>{children}</div>;
+}
+export function CardTitle({children}:{children:React.ReactNode}){ return <div className="h1 mb-2">{children}</div>; }
+export function CardSub({children}:{children:React.ReactNode}){ return <div className="h2">{children}</div>; }
+
+-------------------------
+FILE: web/src/components/Table.tsx
+-------------------------
+export function Table({ children }:{ children: React.ReactNode }) {
+  return <table className="w-full text-sm">
+    {children}
+  </table>;
+}
+export function Thead({ children }:{ children: React.ReactNode }) {
+  return <thead className="text-mut"><tr className="border-b border-line">{children}</tr></thead>;
+}
+export function Th({ children }:{ children: React.ReactNode }) {
+  return <th className="text-left p-3">{children}</th>;
+}
+export function Tbody({ children }:{ children: React.ReactNode }) {
+  return <tbody className="divide-y divide-line">{children}</tbody>;
+}
+export function Td({ children }:{ children: React.ReactNode }) {
+  return <td className="p-3 align-top">{children}</td>;
+}
+
+-------------------------
+FILE: web/src/components/Form.tsx
+-------------------------
+export function Field({label, children}:{label:string; children:React.ReactNode}){
+  return <label className="grid gap-1">
+    <span className="text-sm text-mut">{label}</span>
+    {children}
+  </label>;
+}
+
+-------------------------
+FILE: web/src/components/Dropzone.tsx
+-------------------------
+import { useState, DragEvent } from "react";
+
+export default function Dropzone({ onFile }:{ onFile:(f:File)=>void }){
+  const [highlight, setH] = useState(false);
+  const onDrop = (e:DragEvent<HTMLDivElement>) => {
+    e.preventDefault(); setH(false);
+    const f = e.dataTransfer.files?.[0]; if (f) onFile(f);
+  };
+  return (
+    <div
+      onDragOver={e=>{e.preventDefault(); setH(true);}}
+      onDragLeave={()=>setH(false)}
+      onDrop={onDrop}
+      className={`border-2 border-dashed rounded-2xl p-6 text-center ${highlight ? "border-acc bg-[#0f1721]" : "border-line"}`}
+    >
+      <div className="text-mut">Drag & drop screenshot here or click below</div>
+    </div>
+  );
+}
+
+-------------------------
+FILE: web/src/components/Toast.tsx
+-------------------------
+export { ToastProvider, useToast } from "@/hooks/useToast";
+
+-------------------------
+FILE: web/src/main.tsx
+-------------------------
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import "./styles.css";
+import App from "./App";
+import Dashboard from "./routes/Dashboard";
+import Login from "./routes/Login";
+import Upload from "./routes/Upload";
+import Users from "./routes/Users";
+import Sets from "./routes/Sets";
+import { ToastProvider } from "./components/Toast";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <ToastProvider>
+      <BrowserRouter basename="/admin">
+        <Routes>
+          <Route path="/" element={<App/>}>
+            <Route index element={<Navigate to="dashboard" />} />
+            <Route path="login" element={<Login/>} />
+            <Route path="dashboard" element={<Dashboard/>} />
+            <Route path="upload" element={<Upload/>} />
+            <Route path="users" element={<Users/>} />
+            <Route path="sets" element={<Sets/>} />
+            <Route path="*" element={<Navigate to="dashboard" />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ToastProvider>
+  </React.StrictMode>
+);
+
+-------------------------
+FILE: web/src/App.tsx
+-------------------------
+import { Outlet, Navigate } from "react-router-dom";
+import AppShell from "./components/AppShell";
+import { hasAuth } from "./auth";
+
+export default function App(){
+  if (!hasAuth()) return <Navigate to="/admin/login" replace />;
+  return <AppShell><Outlet/></AppShell>;
+}
+
+-------------------------
+FILE: web/src/routes/Login.tsx
+-------------------------
+import { useState } from "react";
+import { login } from "@/api";
+import { saveAuth } from "@/auth";
+import { useToast } from "@/components/Toast";
+
+export default function Login(){
+  const [u,setU]=useState("admin");
+  const [p,setP]=useState("dwang1237");
+  const { push } = useToast();
+
+  const submit = async (e:React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const tok = await login(u,p);
+      saveAuth(tok.access_token, tok.role);
+      location.href = "/admin/";
+    } catch (err:any){
+      push({ msg: err.message || "Login failed", type: "err" });
+    }
+  };
+
+  return (
+    <div className="min-h-screen grid place-items-center p-6">
+      <div className="card w-full max-w-md">
+        <div className="h1 mb-1">Welcome back</div>
+        <div className="h2 mb-4">Sign in to continue</div>
+        <form onSubmit={submit} className="grid gap-3">
+          <label className="grid gap-1">
+            <span className="text-sm text-mut">Username</span>
+            <input value={u} onChange={e=>setU(e.target.value)} placeholder="admin"/>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-sm text-mut">Password</span>
+            <input type="password" value={p} onChange={e=>setP(e.target.value)} placeholder="••••••••"/>
+          </label>
+          <button className="btn py-2 rounded-xl">Sign in</button>
+          <div className="text-xs text-mut">Dev creds seeded: admin/dwang1237, slave/admin</div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+-------------------------
+FILE: web/src/routes/Dashboard.tsx
+-------------------------
+import { useEffect, useState } from "react";
+import { setStats } from "@/api";
+import { Card, CardTitle } from "@/components/Card";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { useToast } from "@/components/Toast";
+
+export default function Dashboard(){
+  const [hours, setHours] = useState(72);
+  const [data, setData] = useState<any[]>([]);
+  const { push } = useToast();
+
+  async function load(){
+    try {
+      const stats = await setStats(hours);
+      setData(stats.map((s:any)=>({ name: `Set ${s.set_id}`, profit: Number(s.net_profit || 0), wins: s.wins, bets: s.total_bets })));
+    } catch (e:any) { push({ msg: e.message || "Failed to load stats", type:"err" }); }
+  }
+
+  useEffect(()=>{ load(); }, [hours]);
+
+  const totals = {
+    bets: data.reduce((s,x)=>s+x.bets,0),
+    wins: data.reduce((s,x)=>s+x.wins,0),
+    profit: data.reduce((s,x)=>s+x.profit,0).toFixed(2)
+  };
+
+  return (
+    <div className="grid gap-6">
+      <div className="grid md:grid-cols-3 gap-4">
+        <Card><CardTitle>Total Bets</CardTitle><div className="text-3xl font-bold">{totals.bets}</div></Card>
+        <Card><CardTitle>Wins</CardTitle><div className="text-3xl font-bold">{totals.wins}</div></Card>
+        <Card><CardTitle>Net Profit (A$)</CardTitle><div className="text-3xl font-bold">{totals.profit}</div></Card>
+      </div>
+
+      <Card>
+        <div className="flex items-center justify-between">
+          <CardTitle>Profit by Set</CardTitle>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-mut">Hours</span>
+            <input className="w-24" type="number" value={hours} onChange={e=>setHours(Number(e.target.value||72))}/>
+            <button className="btn px-3 py-2 rounded-xl" onClick={load}>Refresh</button>
+          </div>
+        </div>
+        <div className="h-80 mt-4">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="profit" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+-------------------------
+FILE: web/src/routes/Upload.tsx
+-------------------------
+import { useEffect, useState } from "react";
+import { fetchSets, uploadBet } from "@/api";
+import Dropzone from "@/components/Dropzone";
+import { Card, CardTitle } from "@/components/Card";
+import { useToast } from "@/components/Toast";
+
+type SetItem = { id:number; name:string; is_active:boolean };
+
+export default function Upload(){
+  const [sets,setSets]=useState<SetItem[]>([]);
+  const [setId,setSetId]=useState<number|undefined>();
+  const [bookmaker,setBk]=useState("Sportsbet");
+  const [stake,setStake]=useState("");
+  const [file,setFile]=useState<File|null>(null);
+  const [preview,setPreview]=useState<string|undefined>();
+  const [out,setOut]=useState<any>(null);
+  const { push } = useToast();
+
+  useEffect(()=>{ (async()=>{
+    try{
+      const s = await fetchSets(true);
+      setSets(s); if(s.length) setSetId(s[0].id);
+    }catch(e:any){ push({ msg: e.message, type:"err"}); }
+  })(); }, []);
+
+  const submit = async(e:React.FormEvent) => {
+    e.preventDefault();
+    if(!file || !setId || !stake){ push({ msg:"All fields required", type:"err"}); return; }
+    const fd = new FormData();
+    fd.append("set_id", String(setId));
+    fd.append("bookmaker_name", bookmaker);
+    fd.append("stake_manual", stake);
+    fd.append("image", file);
+    try{
+      const resp = await uploadBet(fd);
+      setOut(resp);
+      push({ msg: "Bet uploaded", type: "ok" });
+    }catch(err:any){ push({ msg: err.message || "Upload failed", type:"err"}); }
+  };
+
+  return (
+    <div className="grid gap-6">
+      <Card>
+        <CardTitle>Upload betslip</CardTitle>
+        <form className="grid md:grid-cols-2 gap-4 mt-2" onSubmit={submit}>
+          <label className="grid gap-1">
+            <span className="text-sm text-mut">Set</span>
+            <select value={setId} onChange={e=>setSetId(Number(e.target.value))}>
+              {sets.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-sm text-mut">Bookmaker</span>
+            <input value={bookmaker} onChange={e=>setBk(e.target.value)} />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-sm text-mut">Stake (manual)</span>
+            <input type="number" step="0.01" value={stake} onChange={e=>setStake(e.target.value)} />
+          </label>
+          <div className="grid gap-2">
+            <span className="text-sm text-mut">Screenshot</span>
+            <Dropzone onFile={(f)=>{ setFile(f); setPreview(URL.createObjectURL(f)); }} />
+            <input type="file" accept="image/*" onChange={e=>{ const f=e.target.files?.[0]; if(f){ setFile(f); setPreview(URL.createObjectURL(f)); }}}/>
+          </div>
+          <div className="md:col-span-2">
+            <button className="btn px-4 py-2 rounded-xl">Upload</button>
+          </div>
+        </form>
+      </Card>
+
+      {preview && <Card><CardTitle>Preview</CardTitle><img src={preview} className="rounded-xl border border-line mt-2 max-h-[360px] object-contain"/></Card>}
+      {out && <Card><CardTitle>Parsed result</CardTitle><pre className="mt-2 text-sm overflow-auto">{JSON.stringify(out,null,2)}</pre></Card>}
+    </div>
+  );
+}
+
+-------------------------
+FILE: web/src/routes/Users.tsx
+-------------------------
+import { useEffect, useState } from "react";
+import { listUsers, createUser, updateUser, patchUserStatus, resetPassword } from "@/api";
+import { Card, CardTitle } from "@/components/Card";
+import { Table, Thead, Th, Tbody, Td } from "@/components/Table";
+import { useToast } from "@/components/Toast";
+import { getRole } from "@/auth";
+
+type User = { id:number; username:string; role:"admin"|"employee"; is_active:boolean };
+
+export default function Users(){
+  const [users,setUsers]=useState<User[]>([]);
+  const [u,setU]=useState(""); const [p,setP]=useState(""); const [r,setR]=useState<"admin"|"employee">("employee");
+  const { push } = useToast();
+  const role = getRole();
+
+  const load=async()=>{ try{ setUsers(await listUsers()); }catch(e:any){ push({msg:e.message,type:"err"}); } };
+  useEffect(()=>{ load(); },[]);
+
+  const createU=async()=>{ try{ await createUser(u,p,r); setU(""); setP(""); await load(); push({msg:"User created",type:"ok"});}catch(e:any){ push({msg:e.message,type:"err"});} };
+  const toggle=async(id:number, active:boolean)=>{ await patchUserStatus(id, active); await load(); };
+  const makeAdmin=async(id:number)=>{ await updateUser(id,{role:"admin"}); await load(); };
+  const makeEmployee=async(id:number)=>{ await updateUser(id,{role:"employee"}); await load(); };
+  const reset=async(id:number)=>{ const pw=prompt("New password:"); if(!pw) return; await resetPassword(id,pw); push({msg:"Password updated",type:"ok"}); };
+
+  if(role!=="admin") return <div className="card">You need admin access.</div>;
+
+  return (
+    <div className="grid gap-6">
+      <Card>
+        <CardTitle>Create user</CardTitle>
+        <div className="grid md:grid-cols-[1fr_1fr_200px_120px] gap-3 mt-2">
+          <input placeholder="username" value={u} onChange={e=>setU(e.target.value)}/>
+          <input placeholder="password" value={p} onChange={e=>setP(e.target.value)}/>
+          <select value={r} onChange={e=>setR(e.target.value as any)}>
+            <option value="employee">employee</option>
+            <option value="admin">admin</option>
+          </select>
+          <button className="btn rounded-xl" onClick={createU}>Add</button>
+        </div>
+      </Card>
+
+      <Card>
+        <CardTitle>All users</CardTitle>
+        <div className="overflow-auto">
+          <Table>
+            <Thead>
+              <Th>ID</Th><Th>Username</Th><Th>Role</Th><Th>Active</Th><Th>Actions</Th>
+            </Thead>
+            <Tbody>
+              {users.map(u=>
+                <tr key={u.id}>
+                  <Td>{u.id}</Td>
+                  <Td>{u.username}</Td>
+                  <Td><span className="badge">{u.role}</span></Td>
+                  <Td>{u.is_active?"Yes":"No"}</Td>
+                  <Td>
+                    <div className="flex gap-2">
+                      {u.role==="admin"
+                        ? <button className="px-3 py-2 rounded-xl border border-line" onClick={()=>makeEmployee(u.id)}>Make employee</button>
+                        : <button className="px-3 py-2 rounded-xl border border-line" onClick={()=>makeAdmin(u.id)}>Make admin</button>}
+                      <button className="px-3 py-2 rounded-xl border border-line" onClick={()=>toggle(u.id, !u.is_active)}>{u.is_active?"Disable":"Enable"}</button>
+                      <button className="px-3 py-2 rounded-xl border border-line" onClick={()=>reset(u.id)}>Reset PW</button>
+                    </div>
+                  </Td>
+                </tr>
+              )}
+            </Tbody>
+          </Table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+-------------------------
+FILE: web/src/routes/Sets.tsx
+-------------------------
+import { useEffect, useState } from "react";
+import { fetchSets, createSet, renameSet, toggleSet } from "@/api";
+import { Card, CardTitle } from "@/components/Card";
+import { Table, Thead, Th, Tbody, Td } from "@/components/Table";
+import { useToast } from "@/components/Toast";
+import { getRole } from "@/auth";
+
+type SetItem = { id:number; name:string; is_active:boolean };
+
+export default function Sets(){
+  const [sets,setSets]=useState<SetItem[]>([]);
+  const [name,setName]=useState("");
+  const { push } = useToast();
+  const role = getRole();
+
+  const load=async()=>{ try{ setSets(await fetchSets()); }catch(e:any){ push({msg:e.message,type:"err"});} };
+  useEffect(()=>{ load(); },[]);
+
+  if(role!=="admin") return <div className="card">You need admin access.</div>;
+
+  return (
+    <div className="grid gap-6">
+      <Card>
+        <CardTitle>Create set</CardTitle>
+        <div className="flex gap-3 mt-2">
+          <input placeholder="name (e.g., s)" value={name} onChange={e=>setName(e.target.value)}/>
+          <button className="btn rounded-xl" onClick={async()=>{ if(!name) return; await createSet(name); setName(""); await load(); push({msg:"Set created",type:"ok"}); }}>Add</button>
+        </div>
+      </Card>
+
+      <Card>
+        <CardTitle>All sets</CardTitle>
+        <div className="overflow-auto">
+          <Table>
+            <Thead>
+              <Th>ID</Th><Th>Name</Th><Th>Active</Th><Th>Actions</Th>
+            </Thead>
+            <Tbody>
+              {sets.map(s=>
+                <tr key={s.id}>
+                  <Td>{s.id}</Td>
+                  <Td>{s.name}</Td>
+                  <Td>{s.is_active?"Yes":"No"}</Td>
+                  <Td>
+                    <div className="flex gap-2">
+                      <button className="px-3 py-2 rounded-xl border border-line" onClick={async()=>{ const n=prompt("New name", s.name); if(!n) return; await renameSet(s.id,n); await load(); }}>Rename</button>
+                      <button className="px-3 py-2 rounded-xl border border-line" onClick={async()=>{ await toggleSet(s.id, !s.is_active); await load(); }}>{s.is_active?"Disable":"Enable"}</button>
+                    </div>
+                  </Td>
+                </tr>
+              )}
+            </Tbody>
+          </Table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+Build & run
+
+In Replit Shell (from project root):
+
+cd web
+npm i
+npm run build   # copies build into ../app/static/admin
+cd ..
+# if backend isn't running yet:
+pip install -r requirements.txt
+alembic upgrade head
+python scripts/create_defaults.py
+# Click Run (uvicorn)
