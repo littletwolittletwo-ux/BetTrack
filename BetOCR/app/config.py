@@ -1,6 +1,7 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+﻿from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    AUTH_DISABLED: bool = False  # toggle auth off/on via env
  DATABASE_URL: str
  SECRET_KEY: str
  ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200

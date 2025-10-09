@@ -1,25 +1,28 @@
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app.auth.jwt_tools import decode_token
-from app.db.session import get_db
-from sqlalchemy.orm import Session
+﻿from typing import Annotated
+from fastapi import Depends, HTTPException, status
+from app.config import settings
 from app.models.user import User
 
-bearer = HTTPBearer(auto_error=True)
+# ---- No-auth user (used when AUTH_DISABLED=true) ----
+def _noauth_user() -> User:
+    u = User()
+    u.id = 0
+    u.username = "admin"
+    u.role = "admin"
+    u.is_active = True
+    return u
 
-def current_user(creds: HTTPAuthorizationCredentials = Depends(bearer), db: Session = Depends(get_db)) -> User:
- try:
-     payload = decode_token(creds.credentials)
-     uid = int(payload["sub"]); role = payload.get("role")
- except Exception:
-     raise HTTPException(401, "Invalid token")
- user = db.get(User, uid)
- if not user or not user.is_active:
-     raise HTTPException(401, "User disabled")
- user._role = role
- return user
+def get_current_active_user() -> User:
+    if settings.AUTH_DISABLED:
+        return _noauth_user()
+    # Real auth path would go here if you re-enable auth
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
-def require_admin(user: User = Depends(current_user)) -> User:
- if getattr(user, "_role", None) != "admin":
-     raise HTTPException(403, "Admin only")
- return user
+def get_current_admin() -> User:
+    if settings.AUTH_DISABLED:
+        return _noauth_user()
+    # Real admin check would go here if you re-enable auth
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
+
+CurrentUser = Annotated[User, Depends(get_current_active_user)]
+AdminUser   = Annotated[User, Depends(get_current_admin)]
