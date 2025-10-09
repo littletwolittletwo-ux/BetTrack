@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, HTTPException, status
+﻿from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from app.config import settings
 
@@ -15,7 +15,5 @@ class LoginOut(BaseModel):
 @router.post("/login", response_model=LoginOut)
 def login(_: LoginIn):
     if settings.AUTH_DISABLED:
-        # Always succeed with a fake token for the frontend
         return LoginOut(access_token="dev-token")
-    # If you ever re-enable auth, implement the real login here:
-    raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Auth enabled; implement real login")
+    raise HTTPException(status_code=501, detail="Auth enabled; implement real login")

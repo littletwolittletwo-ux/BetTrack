@@ -3,7 +3,6 @@ from fastapi import Depends, HTTPException, status
 from app.config import settings
 from app.models.user import User
 
-# ---- No-auth user (used when AUTH_DISABLED=true) ----
 def _noauth_user() -> User:
     u = User()
     u.id = 0
@@ -15,13 +14,11 @@ def _noauth_user() -> User:
 def get_current_active_user() -> User:
     if settings.AUTH_DISABLED:
         return _noauth_user()
-    # Real auth path would go here if you re-enable auth
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
 def get_current_admin() -> User:
     if settings.AUTH_DISABLED:
         return _noauth_user()
-    # Real admin check would go here if you re-enable auth
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
 
 CurrentUser = Annotated[User, Depends(get_current_active_user)]

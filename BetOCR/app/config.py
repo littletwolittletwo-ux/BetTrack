@@ -1,20 +1,26 @@
-﻿from pydantic_settings import BaseSettings, SettingsConfigDict
+﻿from typing import List
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 class Settings(BaseSettings):
-    AUTH_DISABLED: bool = False  # toggle auth off/on via env
- DATABASE_URL: str
- SECRET_KEY: str
- ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200
- OCR_ENGINE: str = "tesseract"
- TESSERACT_CMD: str = "/usr/bin/tesseract"
- UPLOAD_DIR: str = "uploads"
- BETFAIR_DEFAULT_COMMISSION: float = 0.05
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
- DEFAULT_ADMIN_USERNAME: str = "admin"
- DEFAULT_ADMIN_PASSWORD: str = "dwang1237"
- DEFAULT_EMPLOYEE_USERNAME: str = "slave"
- DEFAULT_EMPLOYEE_PASSWORD: str = "admin"
+    DATABASE_URL: str = Field(default="")
+    SECRET_KEY: str = Field(default="dev-secret")
 
- model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # Toggle auth off/on via env or code; True = no login required
+    AUTH_DISABLED: bool = Field(default=True)
+
+    DEFAULT_ADMIN_USERNAME: str = Field(default="admin")
+    DEFAULT_ADMIN_PASSWORD: str = Field(default="admin123")
+    DEFAULT_EMPLOYEE_USERNAME: str = Field(default="employee")
+    DEFAULT_EMPLOYEE_PASSWORD: str = Field(default="employee123")
+
+    CORS_ORIGINS: List[str] = Field(default_factory=lambda: ["*"])
 
 settings = Settings()
