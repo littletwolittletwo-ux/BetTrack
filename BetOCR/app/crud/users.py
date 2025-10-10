@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+﻿from sqlalchemy.orm import Session
 from app.models.user import User
 
 def get_by_username(db: Session, username: str) -> User | None:

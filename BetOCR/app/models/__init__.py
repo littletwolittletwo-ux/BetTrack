@@ -1,4 +1,4 @@
-# Central model imports to ensure proper initialization order
+﻿# Central model imports to ensure proper initialization order
 # Import base models first (no relationships)
 from app.models.user import User
 from app.models.bet_set import BetSet

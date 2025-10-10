@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+﻿from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 import os
-from app.deps import current_user
+from app.deps import CurrentUser
 from app.config import settings
 
 router = APIRouter(prefix="/files", tags=["files"])

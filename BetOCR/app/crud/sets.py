@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+﻿from sqlalchemy.orm import Session
 from app.models.bet_set import BetSet
 
 def create(db: Session, name: str) -> BetSet:

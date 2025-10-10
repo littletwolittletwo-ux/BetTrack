@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+﻿from sqlalchemy.orm import Session
 from app.models import BetSet, Bookmaker
 
 SET_NAMES = ["s","c","a","o","d","k"]

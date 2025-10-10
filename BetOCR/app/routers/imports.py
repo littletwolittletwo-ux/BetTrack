@@ -1,9 +1,9 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
+﻿from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 import csv, io, os, uuid
 from datetime import datetime
 from typing import Optional
-from app.deps import current_user              # employees & admins
+from app.deps import CurrentUser              # employees & admins
 from app.db.session import get_db
 from app.models.user import User
 from app.models.bet_set import BetSet
@@ -29,7 +29,7 @@ async def import_csv(
     file: UploadFile = File(...),
     dry_run: bool = Query(False, description="Validate only; do not write rows"),
     default_set: Optional[str] = Query(None, description="Fallback set (name or id) for new schema if CSV has no 'set' column"),
-    user: User = Depends(current_user),
+    user: User = Depends(CurrentUser),
     db: Session = Depends(get_db),
 ):
     raw = await file.read()

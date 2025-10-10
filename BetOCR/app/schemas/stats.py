@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+﻿from pydantic import BaseModel
 
 class SetStatsOut(BaseModel):
  set_id: int

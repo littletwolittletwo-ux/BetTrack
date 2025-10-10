@@ -1,1 +1,1 @@
-# Empty file to make auth a package
+﻿# Empty file to make auth a package

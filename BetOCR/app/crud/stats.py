@@ -1,2 +1,2 @@
-# placeholder (logic is in crud/bets.set_stats)
+﻿# placeholder (logic is in crud/bets.set_stats)
 pass

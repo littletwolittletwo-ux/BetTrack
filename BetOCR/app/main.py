@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Depends, UploadFile, File, Form
+﻿from fastapi import FastAPI, Request, Depends, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import os
@@ -128,6 +128,11 @@ def admin_redirect():
 @app.get("/admin/", response_class=FileResponse)
 def admin_spa():
     return FileResponse("app/static/admin/index.html")
+
+# Redirect any explicit /admin/login requests to the SPA root
+@app.get("/admin/login", response_class=RedirectResponse)
+def admin_login_redirect():
+    return RedirectResponse(url="/admin/", status_code=302)
 
 # Catch-all route for React SPA client-side routing
 @app.get("/admin/{path:path}")

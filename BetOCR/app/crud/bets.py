@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+﻿from sqlalchemy.orm import Session
 from sqlalchemy import func, case, text
 from app.models.bet import Bet
 from app.models.bookmaker import Bookmaker

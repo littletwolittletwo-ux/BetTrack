@@ -1,4 +1,4 @@
-from sqlalchemy import (
+﻿from sqlalchemy import (
  Integer, String, Numeric, TIMESTAMP, ForeignKey, Text
 )
 from sqlalchemy.dialects.postgresql import JSONB

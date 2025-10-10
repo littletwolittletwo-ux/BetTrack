@@ -1,10 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+﻿from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime
 import os, json, uuid
 from pathlib import Path
 from typing import Any
-from app.deps import current_user, require_admin
+from app.deps import CurrentUser, AdminUser
 from app.db.session import get_db
 from app.config import settings
 from app.crud.bets import create_bet, get_or_create_bookmaker, recent_bets
@@ -52,7 +52,7 @@ async def upload_bet(
  bookmaker_name: str = Form(...),
  stake_manual: float = Form(...),
  image: UploadFile = File(...),
- user = Depends(current_user),
+ user = Depends(CurrentUser),
  db: Session = Depends(get_db)
 ):
  os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
@@ -118,12 +118,12 @@ async def upload_bet(
  return bet
 
 @router.get("/recent", response_model=list[BetOut])
-def recent(hours: int = 72, set_id: int | None = None, db: Session = Depends(get_db), user = Depends(current_user)):
+def recent(hours: int = 72, set_id: int | None = None, db: Session = Depends(get_db), user = Depends(CurrentUser)):
  bets = recent_bets(db, hours=hours, set_id=set_id)
  return bets
 
 @router.get("/all", response_model=list[BetOut])
-def get_all_bets(limit: int = 100, offset: int = 0, db: Session = Depends(get_db), user = Depends(current_user)):
+def get_all_bets(limit: int = 100, offset: int = 0, db: Session = Depends(get_db), user = Depends(CurrentUser)):
  """Get all uploaded bets with comprehensive details for the uploads panel."""
  from app.models.bet import Bet
  
@@ -137,7 +137,7 @@ def get_all_bets(limit: int = 100, offset: int = 0, db: Session = Depends(get_db
  return bets
 
 @router.patch("/{bet_id}", response_model=BetOut)
-def update_bet(bet_id: int, bet_update: BetUpdate, db: Session = Depends(get_db), user = Depends(current_user)):
+def update_bet(bet_id: int, bet_update: BetUpdate, db: Session = Depends(get_db), user = Depends(CurrentUser)):
     """Update a bet record with manual corrections from confirmation popup."""
     from app.models.bet import Bet
     
@@ -182,7 +182,7 @@ def update_bet(bet_id: int, bet_update: BetUpdate, db: Session = Depends(get_db)
     return bet
 
 @router.delete("/{bet_id}")
-def delete_bet(bet_id: int, db: Session = Depends(get_db), user = Depends(current_user)):
+def delete_bet(bet_id: int, db: Session = Depends(get_db), user = Depends(CurrentUser)):
     """Delete a bet record - can be used to cancel uploads from confirmation popup."""
     from app.models.bet import Bet
     import os

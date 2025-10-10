@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+﻿from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timedelta
 import math
 from typing import List, Dict, Any
 from app.db.session import get_db
-from app.deps import current_user
+from app.deps import CurrentUser
 from app.models.bet import Bet
 from app.models.bet_set import BetSet
 from app.models.bookmaker import Bookmaker
@@ -19,7 +19,7 @@ def _utcnow():
 def risk_stats(
     hours: int = Query(720, ge=1, le=365*24, description="Lookback window in hours"),
     db: Session = Depends(get_db),
-    user = Depends(current_user),
+    user = Depends(CurrentUser),
 ):
     # Time range
     since = _utcnow() - timedelta(hours=hours)

@@ -1,4 +1,4 @@
-import pytesseract, json, cv2
+﻿import pytesseract, json, cv2
 from app.config import settings
 from .preprocess import preprocess
 

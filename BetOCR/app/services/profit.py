@@ -1,4 +1,4 @@
-def compute_profit(bookmaker: str, side: str | None, odds: float | None, stake: float,
+﻿def compute_profit(bookmaker: str, side: str | None, odds: float | None, stake: float,
                 result_status: str | None, cashout_amount: float | None, commission: float | None) -> float:
  commission = commission or 0.0
  if result_status and result_status.lower().startswith("cashout") and cashout_amount is not None:

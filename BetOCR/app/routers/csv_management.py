@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+﻿from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import os
 from typing import List
 
-from app.deps import require_admin  # Only admins can access these endpoints
+from app.deps import AdminUser  # Only admins can access these endpoints
 from app.db.session import get_db
 from app.models.csv_upload import CsvUpload
 from app.models.user import User
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/admin/csv", tags=["csv-management"])
 @router.get("/uploads")
 async def list_csv_uploads(
     days: int = Query(7, ge=1, le=7, description="Number of days to look back (max 7 due to retention policy)"),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(AdminUser),
     db: Session = Depends(get_db),
 ):
     """List CSV uploads from the last N days (capped at 7 days due to retention policy)"""
@@ -70,7 +70,7 @@ async def list_csv_uploads(
 @router.get("/uploads/{upload_id}/download")
 async def download_csv_file(
     upload_id: int,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(AdminUser),
     db: Session = Depends(get_db),
 ):
     """Download a specific CSV file (only files uploaded within last 7 days)"""
@@ -95,7 +95,7 @@ async def download_csv_file(
 @router.delete("/uploads/{upload_id}")
 async def delete_csv_upload(
     upload_id: int,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(AdminUser),
     db: Session = Depends(get_db),
 ):
     """Delete a CSV upload record and file"""
@@ -119,7 +119,7 @@ async def delete_csv_upload(
 @router.post("/cleanup")
 async def cleanup_old_csv_files(
     days: int = Query(7, ge=7, le=7, description="Delete files older than 7 days (fixed for retention policy)"),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(AdminUser),
     db: Session = Depends(get_db),
 ):
     """Clean up CSV files older than 7 days (enforced by retention policy)"""

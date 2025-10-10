@@ -4,6 +4,19 @@
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>bet-ocr-app</title>
+    <!-- Ensure app runs without login: seed dev token/role before app boot -->
+    <script>
+      (function(){
+        try {
+          if (!localStorage.getItem('token')) {
+            localStorage.setItem('token', 'dev-token');
+          }
+          if (!localStorage.getItem('role')) {
+            localStorage.setItem('role', 'admin');
+          }
+        } catch (e) {}
+      })();
+    </script>
     <script type="module" crossorigin src="/static/admin/assets/index-BS2sSFd4.js"></script>
     <link rel="stylesheet" crossorigin href="/static/admin/assets/index-COCHl8DO.css">
   </head>
